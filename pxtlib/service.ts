@@ -7,81 +7,36 @@ namespace ts.pxtc {
     export import U = pxtc.Util;
 
     export const ON_START_TYPE = "pxt-on-start";
-    export const ON_START_COMMENT = U.lf("on start");
-    export const HANDLER_COMMENT = U.lf("code goes here");
+    export const ON_START_COMMENT = "on start"; // TODO: Localize? (adding lf doesn't work because this is run before translations are downloaded)
+    export const HANDLER_COMMENT = "code goes here"; // TODO: Localize? (adding lf doesn't work because this is run before translations are downloaded)
     export const TS_STATEMENT_TYPE = "typescript_statement";
+    export const TS_DEBUGGER_TYPE = "debugger_keyword";
     export const TS_OUTPUT_TYPE = "typescript_expression";
     export const PAUSE_UNTIL_TYPE = "pxt_pause_until";
     export const BINARY_JS = "binary.js";
-    export const BINARY_CS = "binary.cs";
     export const BINARY_ASM = "binary.asm";
     export const BINARY_HEX = "binary.hex";
     export const BINARY_UF2 = "binary.uf2";
     export const BINARY_ELF = "binary.elf";
 
     export const NATIVE_TYPE_THUMB = "thumb";
-    export const NATIVE_TYPE_AVR = "AVR";
-    export const NATIVE_TYPE_CS = "C#";
-    export const NATIVE_TYPE_AVRVM = "AVRVM";
-
-    export interface ParameterDesc {
-        name: string;
-        description: string;
-        type: string;
-        initializer?: string;
-        default?: string;
-        properties?: PropertyDesc[];
-        handlerParameters?: PropertyDesc[];
-        options?: pxt.Map<PropertyOption>;
-        isEnum?: boolean;
-    }
-
-    export interface PropertyDesc {
-        name: string;
-        type: string;
-    }
-
-    export interface PropertyOption {
-        value: any;
-    }
-
-    export enum SymbolKind {
-        None,
-        Method,
-        Property,
-        Function,
-        Variable,
-        Module,
-        Enum,
-        EnumMember,
-        Class,
-        Interface,
-    }
-
-    export interface SymbolInfo {
-        attributes: CommentAttrs;
-        name: string;
-        namespace: string;
-        kind: SymbolKind;
-        parameters: ParameterDesc[];
-        retType: string;
-        extendsTypes?: string[]; // for classes and interfaces
-        isContextual?: boolean;
-        qName?: string;
-        pkg?: string;
-        snippet?: string;
-        blockFields?: ParsedBlockDef;
-    }
-
-    export interface ApisInfo {
-        byQName: pxt.Map<SymbolInfo>;
-        jres?: pxt.Map<pxt.JRes>;
-    }
 
     export interface BlocksInfo {
         apis: ApisInfo;
         blocks: SymbolInfo[];
         blocksById: pxt.Map<SymbolInfo>;
+        enumsByName: pxt.Map<EnumInfo>;
+    }
+
+    export interface EnumInfo {
+        name: string;
+        memberName: string;
+        blockId: string;
+        isBitMask: boolean;
+        isHash: boolean;
+        firstValue?: number;
+        initialMembers: string[];
+        promptHint: string;
     }
 
     export interface CompletionEntry {
@@ -91,129 +46,10 @@ namespace ts.pxtc {
     }
 
     export interface CompletionInfo {
-        entries: pxt.Map<SymbolInfo>;
+        entries: SymbolInfo[];
         isMemberCompletion: boolean;
         isNewIdentifierLocation: boolean;
         isTypeLocation: boolean;
-    }
-
-
-    export interface CommentAttrs {
-        debug?: boolean; // requires ?dbg=1
-        shim?: string;
-        enumval?: string;
-        helper?: string;
-        help?: string;
-        async?: boolean;
-        promise?: boolean;
-        hidden?: boolean;
-        undeletable?: boolean;
-        callingConvention: ir.CallingConvention;
-        block?: string; // format of the block, used at namespace level for category name
-        blockId?: string; // unique id of the block
-        blockGap?: string; // pixels in toolbox after the block is inserted
-        blockExternalInputs?: boolean; // force external inputs. Deprecated; see inlineInputMode.
-        blockImportId?: string;
-        blockBuiltin?: boolean;
-        blockNamespace?: string;
-        blockIdentity?: string;
-        blockAllowMultiple?: boolean; // override single block behavior for events
-        blockHidden?: boolean; // not available directly in toolbox
-        blockImage?: boolean; // for enum variable, specifies that it should use an image from a predefined location
-        fixedInstances?: boolean;
-        fixedInstance?: boolean;
-        indexedInstanceNS?: string;
-        indexedInstanceShim?: string;
-        defaultInstance?: string;
-        autoCreate?: string;
-        noRefCounting?: boolean;
-        color?: string;
-        colorSecondary?: string;
-        colorTertiary?: string;
-        icon?: string;
-        jresURL?: string;
-        iconURL?: string;
-        imageLiteral?: number;
-        weight?: number;
-        parts?: string;
-        trackArgs?: number[];
-        advanced?: boolean;
-        deprecated?: boolean;
-        useEnumVal?: boolean; // for conversion from typescript to blocks with enumVal
-        // On block
-        subcategory?: string;
-        group?: string;
-        whenUsed?: boolean;
-        jres?: string;
-        // On namepspace
-        subcategories?: string[];
-        groups?: string[];
-        groupIcons?: string[];
-        labelLineWidth?: string;
-        handlerStatement?: boolean; // indicates a block with a callback that can be used as a statement
-        afterOnStart?: boolean; // indicates an event that should be compiled after on start when converting to typescript
-
-        // on interfaces
-        indexerGet?: string;
-        indexerSet?: string;
-
-        mutate?: string;
-        mutateText?: string;
-        mutatePrefix?: string;
-        mutateDefaults?: string;
-        mutatePropertyEnum?: string;
-        inlineInputMode?: string; // can be inline, external, or auto
-        expandableArgumentMode?: string; // can be disabled, enabled, or toggle
-
-        optionalVariableArgs?: boolean;
-        toolboxVariableArgs?: string;
-
-        _name?: string;
-        _source?: string;
-        _def?: ParsedBlockDef;
-        _expandedDef?: ParsedBlockDef;
-        jsDoc?: string;
-        paramHelp?: pxt.Map<string>;
-        // foo.defl=12 -> paramDefl: { foo: "12" }
-        paramDefl: pxt.Map<string>;
-
-        paramMin?: pxt.Map<string>; // min range
-        paramMax?: pxt.Map<string>; // max range
-        // Map for custom field editor parameters
-        paramFieldEditor?: pxt.Map<string>; //.fieldEditor
-        paramShadowOptions?: pxt.Map<pxt.Map<string>>; //.shadowOptions.
-        paramFieldEditorOptions?: pxt.Map<pxt.Map<string>>; //.fieldOptions.
-    }
-
-
-    export type BlockContentPart = BlockLabel | BlockParameter | BlockImage;
-    export type BlockPart = BlockContentPart | BlockBreak;
-
-    export interface BlockLabel {
-        kind: "label";
-        text: string;
-        style?: string[];
-        cssClass?: string;
-    }
-
-    export interface BlockParameter {
-        kind: "param";
-        name: string;
-        shadowBlockId?: string;
-    }
-
-    export interface BlockBreak {
-        kind: "break";
-    }
-
-    export interface BlockImage {
-        kind: "image";
-        uri: string;
-    }
-
-    export interface ParsedBlockDef {
-        parts: ReadonlyArray<(BlockPart)>;
-        parameters: ReadonlyArray<BlockParameter>;
     }
 
     export interface LocationInfo {
@@ -259,6 +95,7 @@ namespace ts.pxtc {
         saveOnly?: boolean;
         userContextWindow?: Window;
         downloadFileBaseName?: string;
+        headerId?: string;
         confirmAsync?: (confirmOptions: {}) => Promise<number>;
         configData?: ConfigEntry[];
     }
@@ -306,28 +143,39 @@ namespace ts.pxtc {
 
     /* @internal */
     const enum TokenKind {
-        SingleAsterisk      = 1,
-        DoubleAsterisk      = 1 << 1,
-        SingleUnderscore    = 1 << 2,
-        DoubleUnderscore    = 1 << 3,
-        Escape              = 1 << 4,
-        Pipe                = 1 << 5,
-        Parameter           = 1 << 6,
-        Word                = 1 << 7,
-        Image               = 1 << 8,
-        TaggedText               = 1 << 9,
+        SingleAsterisk = 1,
+        DoubleAsterisk = 1 << 1,
+        SingleUnderscore = 1 << 2,
+        DoubleUnderscore = 1 << 3,
+        Escape = 1 << 4,
+        Pipe = 1 << 5,
+        Parameter = 1 << 6,
+        Word = 1 << 7,
+        Image = 1 << 8,
+        TaggedText = 1 << 9,
+        ParamRef = 1 << 10,
 
-        TripleUnderscore    = SingleUnderscore | DoubleUnderscore,
-        TripleAsterisk      = SingleAsterisk | DoubleAsterisk,
+        TripleUnderscore = SingleUnderscore | DoubleUnderscore,
+        TripleAsterisk = SingleAsterisk | DoubleAsterisk,
         StyleMarks = TripleAsterisk | TripleUnderscore,
         Bold = DoubleUnderscore | DoubleAsterisk,
-        Italics = SingleUnderscore | SingleAsterisk
+        Italics = SingleUnderscore | SingleAsterisk,
+
+        Unstylable = Parameter | Pipe | ParamRef,
+        Text = Word | Escape
     }
 
     interface Token {
         kind: TokenKind;
         content?: string;
         type?: string;
+        name?: string;
+    }
+
+    interface Label {
+        content: string;
+        styles: number;
+        endingToken?: string;
     }
 
     export function computeUsedParts(resp: CompileResult, ignoreBuiltin = false): string[] {
@@ -335,7 +183,7 @@ namespace ts.pxtc {
             return [];
 
         let parts: string[] = [];
-        for (let symbol in resp.usedSymbols) {
+        Object.keys(resp.usedSymbols).forEach(symbol => {
             let info = resp.usedSymbols[symbol]
             if (info && info.attributes.parts) {
                 let partsRaw = info.attributes.parts;
@@ -348,7 +196,7 @@ namespace ts.pxtc {
                     });
                 }
             }
-        }
+        });
 
         if (ignoreBuiltin) {
             const builtinParts = pxt.appTarget.simulator.boardDefinition.onboardComponents;
@@ -373,13 +221,202 @@ namespace ts.pxtc {
         return n ? Util.capitalize(n.split('.')[0]) : undefined;
     }
 
-    export function getBlocksInfo(info: ApisInfo): BlocksInfo {
-        const blocks = pxtc.Util.values(info.byQName)
-            .filter(s => !!s.attributes.block && !!s.attributes.blockId && (s.kind != pxtc.SymbolKind.EnumMember));
+    export function getBlocksInfo(info: ApisInfo, categoryFilters?: string[]): BlocksInfo {
+        let blocks: SymbolInfo[] = []
+        const combinedSet: pxt.Map<SymbolInfo> = {}
+        const combinedGet: pxt.Map<SymbolInfo> = {}
+        const combinedChange: pxt.Map<SymbolInfo> = {}
+        const enumsByName: pxt.Map<EnumInfo> = {};
+
+        function addCombined(rtp: string, s: SymbolInfo) {
+            const isGet = rtp == "get"
+            const isSet = rtp == "set"
+            const isNumberType = s.retType == "number"
+            const m = isGet ? combinedGet : (isSet ? combinedSet : combinedChange)
+            const mkey = `${s.namespace}.${s.retType}`
+
+            let ex = U.lookup(m, mkey)
+            if (!ex) {
+                const tp = `@${rtp}@`
+
+                let paramNameShadow: string, paramValueShadow: string;
+
+                if (s.attributes.blockCombineShadow) {
+
+                    // allowable %blockCombineShadow strings:-
+                    //   '{name shadow},' or '{value shadow}' or ',{value shadow}' or '{name shadow},{value shadow}'
+                    const attribute = s.attributes.blockCombineShadow;
+                    const match = attribute.match(/^([^,.]*),?([^,.]*)$/);
+                    if (match && match.length == 3) {
+                        paramNameShadow = match[1].trim();
+                        paramValueShadow = match[2].trim();
+                        if (paramValueShadow.length == 0 && !Util.endsWith(attribute, ",")) {
+                            paramValueShadow = paramNameShadow;
+                            paramNameShadow = "";
+                        }
+                    }
+                }
+                const varName = s.attributes.blockSetVariable || s.namespace.toLocaleLowerCase();
+
+                const paramName = `${varName}=${paramNameShadow || ""}`
+                const paramValue = `value=${paramValueShadow || ""}`;
+
+                ex = m[mkey] = {
+                    attributes: {
+                        blockId: `${isNumberType ? s.namespace : mkey}_blockCombine_${rtp}`,
+                        callingConvention: ir.CallingConvention.Plain,
+                        group: s.attributes.group, // first %blockCombine defines
+                        paramDefl: {},
+                        jsDoc: isGet
+                            ? U.lf("Read value of a property on an object")
+                            : U.lf("Update value of property on an object")
+                    },
+                    name: tp,
+                    namespace: s.namespace,
+                    qName: `${mkey}.${tp}`,
+                    pkg: s.pkg,
+                    kind: SymbolKind.Property,
+                    parameters: [
+                        {
+                            name: "property",
+                            description: isGet ?
+                                U.lf("the name of the property to read") :
+                                U.lf("the name of the property to change"),
+                            isEnum: true,
+                            type: "@combined@"
+                        },
+                        {
+                            name: "value",
+                            description: isSet ?
+                                U.lf("the new value of the property") :
+                                U.lf("the amount by which to change the property"),
+                            type: s.retType,
+                        }
+                    ].slice(0, isGet ? 1 : 2),
+                    retType: isGet ? s.retType : "void",
+                    combinedProperties: []
+                }
+                ex.attributes.block =
+                    isGet ? `%${paramName} %property` :
+                        isSet ? `set %${paramName} %property to %${paramValue}` :
+                            `change %${paramName} %property by %${paramValue}`
+                updateBlockDef(ex.attributes)
+                blocks.push(ex)
+            }
+
+            ex.combinedProperties.push(s.qName)
+        }
+
+        for (let s of pxtc.Util.values(info.byQName)) {
+            if (s.attributes.shim === "ENUM_GET" && s.attributes.enumName && s.attributes.blockId) {
+                let didFail = false;
+                if (enumsByName[s.attributes.enumName]) {
+                    console.warn(`Enum block ${s.attributes.blockId} trying to overwrite enum ${s.attributes.enumName}`);
+                    didFail = true;
+                }
+
+                if (!s.attributes.enumMemberName) {
+                    console.warn(`Enum block ${s.attributes.blockId} should specify enumMemberName`);
+                    didFail = true;
+                }
+
+                if (!s.attributes.enumPromptHint) {
+                    console.warn(`Enum block ${s.attributes.blockId} should specify enumPromptHint`);
+                    didFail = true;
+                }
+
+                if (!s.attributes.enumInitialMembers || !s.attributes.enumInitialMembers.length) {
+                    console.warn(`Enum block ${s.attributes.blockId} should specify enumInitialMembers`);
+                    didFail = true;
+                }
+
+                if (didFail) {
+                    continue;
+                }
+
+                const firstValue = parseInt(s.attributes.enumStartValue as any);
+
+                enumsByName[s.attributes.enumName] = {
+                    blockId: s.attributes.blockId,
+                    name: s.attributes.enumName,
+                    memberName: s.attributes.enumMemberName,
+                    firstValue: isNaN(firstValue) ? undefined : firstValue,
+                    isBitMask: s.attributes.enumIsBitMask,
+                    isHash: s.attributes.enumIsHash,
+                    initialMembers: s.attributes.enumInitialMembers,
+                    promptHint: s.attributes.enumPromptHint
+                };
+            }
+
+            if (s.attributes.blockCombine) {
+                if (!/@set/.test(s.name)) {
+                    addCombined("get", s)
+                }
+
+                if (!s.isReadOnly) {
+                    if (s.retType == 'number') {
+                        addCombined("change", s)
+                    }
+                    addCombined("set", s)
+                }
+            } else if (!!s.attributes.block
+                && !s.attributes.fixedInstance
+                && s.kind != pxtc.SymbolKind.EnumMember
+                && s.kind != pxtc.SymbolKind.Module
+                && s.kind != pxtc.SymbolKind.Interface
+                && s.kind != pxtc.SymbolKind.Class) {
+                if (!s.attributes.blockId)
+                    s.attributes.blockId = s.qName.replace(/\./g, "_")
+                if (s.attributes.block == "true") {
+                    let b = U.uncapitalize(s.name)
+                    if (s.kind == SymbolKind.Method || s.kind == SymbolKind.Property) {
+                        b += " %" + s.namespace.toLowerCase()
+                    }
+                    for (let p of s.parameters || []) {
+                        b += " %" + p.name
+                    }
+                    s.attributes.block = b
+                    updateBlockDef(s.attributes)
+                }
+                blocks.push(s)
+            }
+        }
+
+        // derive common block properties from namespace
+        for (let b of blocks) {
+            let parent = U.lookup(info.byQName, b.namespace)
+            if (!parent) continue
+            let pattr = parent.attributes as any
+            let battr = b.attributes as any
+
+            for (let n of ["blockNamespace", "color", "blockGap"]) {
+                if (battr[n] === undefined && pattr[n])
+                    battr[n] = pattr[n]
+            }
+        }
+
+        if (pxt.appTarget && pxt.appTarget.runtime && Array.isArray(pxt.appTarget.runtime.bannedCategories)) {
+            filterCategories(pxt.appTarget.runtime.bannedCategories)
+        }
+
+        if (categoryFilters) {
+            filterCategories(categoryFilters);
+        }
+
         return {
             apis: info,
             blocks,
-            blocksById: pxt.Util.toDictionary(blocks, b => b.attributes.blockId)
+            blocksById: pxt.Util.toDictionary(blocks, b => b.attributes.blockId),
+            enumsByName
+        }
+
+        function filterCategories(banned: string[]) {
+            if (banned.length) {
+                blocks = blocks.filter(b => {
+                    let ns = (b.attributes.blockNamespace || b.namespace).split('.')[0];
+                    return banned.indexOf(ns) === -1;
+                });
+            }
         }
     }
 
@@ -387,6 +424,7 @@ namespace ts.pxtc {
         const lang = pxtc.Util.userLanguage();
         if (pxtc.Util.userLanguage() == "en") return Promise.resolve(apis);
 
+        const errors: pxt.Map<number> = {};
         return mainPkg.localizationStringsAsync(lang)
             .then(loc => Util.values(apis.byQName).forEach(fn => {
                 const jsDoc = loc[fn.qName]
@@ -396,7 +434,21 @@ namespace ts.pxtc {
                         fn.parameters.forEach(pi => pi.description = loc[`${fn.qName}|param|${pi.name}`] || pi.description);
                 }
                 const nsDoc = loc['{id:category}' + Util.capitalize(fn.qName)];
-                const locBlock = loc[`${fn.qName}|block`];
+                let locBlock = loc[`${fn.qName}|block`];
+
+                if (!locBlock && fn.attributes.useLoc) {
+                    const otherFn = apis.byQName[fn.attributes.useLoc];
+
+                    if (otherFn) {
+                        const otherTranslation = loc[`${otherFn.qName}|block`];
+                        const isSameBlockDef = fn.attributes.block === (otherFn.attributes._untranslatedBlock || otherFn.attributes.block);
+
+                        if (isSameBlockDef && !!otherTranslation) {
+                            locBlock = otherTranslation;
+                        }
+                    }
+                }
+
                 if (nsDoc) {
                     // Check for "friendly namespace"
                     if (fn.attributes.block) {
@@ -408,7 +460,8 @@ namespace ts.pxtc {
                 else if (fn.attributes.block && locBlock) {
                     const ps = pxt.blocks.compileInfo(fn);
                     const oldBlock = fn.attributes.block;
-                    fn.attributes.block = pxt.blocks.normalizeBlock(locBlock);
+                    fn.attributes.block = pxt.blocks.normalizeBlock(locBlock, err => errors[`${fn}.${lang}`] = 1);
+                    fn.attributes._untranslatedBlock = oldBlock;
                     if (oldBlock != fn.attributes.block) {
                         const locps = pxt.blocks.compileInfo(fn);
                         if (JSON.stringify(ps) != JSON.stringify(locps)) {
@@ -417,8 +470,13 @@ namespace ts.pxtc {
                         }
                     }
                 }
+                updateBlockDef(fn.attributes);
             }))
-            .then(() => apis);
+            .then(() => apis)
+            .finally(() => {
+                if (Object.keys(errors).length)
+                    pxt.reportError(`loc.errors`, `invalid translation`, errors);
+            })
     }
 
     export function emptyExtInfo(): ExtensionInfo {
@@ -442,8 +500,22 @@ namespace ts.pxtc {
         return r;
     }
 
-    const numberAttributes = ["weight", "imageLiteral"]
-    const booleanAttributes = ["advanced", "handlerStatement", "afterOnStart", "optionalVariableArgs", "blockHidden"]
+    const numberAttributes = ["weight", "imageLiteral", "topblockWeight"]
+    const booleanAttributes = [
+        "advanced",
+        "handlerStatement",
+        "afterOnStart",
+        "optionalVariableArgs",
+        "blockHidden",
+        "constantShim",
+        "blockCombine",
+        "enumIsBitMask",
+        "enumIsHash",
+        "decompileIndirectFixedInstances",
+        "topblock",
+        "callInDebugger",
+        "duplicateShadowOnDrag"
+    ];
 
     export function parseCommentString(cmt: string): CommentAttrs {
         let res: CommentAttrs = {
@@ -465,6 +537,9 @@ namespace ts.pxtc {
                         } else {
                             res.paramDefl[n.slice(0, n.length - 5)] = v
                         }
+                    } else if (U.endsWith(n, ".shadow")) {
+                        if (!res._shadowOverrides) res._shadowOverrides = {};
+                        res._shadowOverrides[n.slice(0, n.length - 7)] = v;
                     } else if (U.endsWith(n, ".fieldEditor")) {
                         if (!res.paramFieldEditor) res.paramFieldEditor = {}
                         res.paramFieldEditor[n.slice(0, n.length - 12)] = v
@@ -506,6 +581,10 @@ namespace ts.pxtc {
 
         if (res.trackArgs) {
             res.trackArgs = ((res.trackArgs as any) as string).split(/[ ,]+/).map(s => parseInt(s) || 0)
+        }
+
+        if (res.enumInitialMembers) {
+            res.enumInitialMembers = ((res.enumInitialMembers as any) as string).split(/[ ,]+/);
         }
 
         if (res.blockExternalInputs && !res.inlineInputMode) {
@@ -573,15 +652,38 @@ namespace ts.pxtc {
                 res.groupIcons = undefined;
             }
         }
-        if (res.block) {
-            const parts = res.block.split("||");
-            res._def = parseBlockDefinition(parts[0]);
-            if (!res._def) pxt.debug("Unable to parse block def for id: " + res.blockId);
-            if (parts[1]) res._expandedDef = parseBlockDefinition(parts[1]);
-            if (parts[1] && !res._expandedDef) pxt.debug("Unable to parse expanded block def for id: " + res.blockId);
+        if (res.groupHelp) {
+            try {
+                res.groupHelp = JSON.parse(res.groupHelp as any);
+            }
+            catch (e) {
+                res.groupHelp = undefined;
+            }
         }
+        updateBlockDef(res);
 
         return res
+    }
+
+    export function updateBlockDef(attrs: CommentAttrs) {
+        if (attrs.block) {
+            const parts = attrs.block.split("||");
+            attrs._def = applyOverrides(parseBlockDefinition(parts[0]));
+            if (!attrs._def) pxt.debug("Unable to parse block def for id: " + attrs.blockId);
+            if (parts[1]) attrs._expandedDef = applyOverrides(parseBlockDefinition(parts[1]));
+            if (parts[1] && !attrs._expandedDef) pxt.debug("Unable to parse expanded block def for id: " + attrs.blockId);
+        }
+
+        function applyOverrides(def: ParsedBlockDef) {
+            if (attrs._shadowOverrides) {
+                def.parameters.forEach(p => {
+                    const shadow = attrs._shadowOverrides[p.name];
+                    if (shadow === "unset") delete p.shadowBlockId;
+                    else if (shadow != null) p.shadowBlockId = shadow;
+                });
+            }
+            return def;
+        }
     }
 
     export function parseBlockDefinition(def: string): ParsedBlockDef {
@@ -591,20 +693,24 @@ namespace ts.pxtc {
         let strIndex = 0;
         for (; strIndex < def.length; strIndex++) {
             const char = def[strIndex];
+            const restoreIndex = strIndex;
             let newToken: Token;
             switch (char) {
                 case "*":
                 case "_":
-                    const tk = eatToken(c => c == char).length;
+                    const tk = eatToken(c => c == char);
                     const offset = char === "_" ? 2 : 0;
-                    if (tk === 1) newToken = { kind: TokenKind.SingleAsterisk << offset }
-                    else if (tk === 2) newToken = { kind: TokenKind.DoubleAsterisk << offset };
-                    else if (tk === 3) newToken = { kind: TokenKind.TripleAsterisk << offset };
-                    else return undefined;
+                    if (tk.length === 1) newToken = { kind: TokenKind.SingleAsterisk << offset, content: tk }
+                    else if (tk.length === 2) newToken = { kind: TokenKind.DoubleAsterisk << offset, content: tk };
+                    else if (tk.length === 3) newToken = { kind: TokenKind.TripleAsterisk << offset, content: tk };
+                    else strIndex = restoreIndex; // error: no more than three style marks
                     break;
                 case "`":
                     const image = eatEnclosure("`");
-                    if (image === undefined) return undefined; // error: not terminated
+                    if (image === undefined) {
+                        strIndex = restoreIndex; // error: not terminated
+                        break;
+                    }
                     newToken = { kind: TokenKind.Image, content: image };
                     break;
                 case "|":
@@ -615,16 +721,31 @@ namespace ts.pxtc {
                     break;
                 case "[":
                     const contentText = eatEnclosure("]");
-                    if (contentText === undefined) return undefined; // error: not terminated
-                    if (def[strIndex++ + 1] !== "(") return undefined; // error: must be followed by class
-                    const contentClass = eatEnclosure(")");
-                    if (contentClass === undefined) return undefined; // error: not terminated
-                    newToken = { kind: TokenKind.TaggedText, content: contentText, type: contentClass };
+                    if (contentText !== undefined && def[strIndex++ + 1] === "(") {
+                        const contentClass = eatEnclosure(")");
+                        if (contentClass !== undefined) {
+                            newToken = { kind: TokenKind.TaggedText, content: contentText, type: contentClass };
+                            break;
+                        }
+                    }
+                    strIndex = restoreIndex; // error: format should be [text](class)
                     break;
+                case "$":
                 case "%":
                     const param = eatToken(c => /[a-zA-Z0-9_=]/.test(c), true).split("=");
-                    if (param.length > 2) return undefined; // error: invalid parameter
-                    newToken = { kind: TokenKind.Parameter, content: param[0], type: param[1] };
+                    if (param.length > 2) {
+                        strIndex = restoreIndex; // error: too many equals signs
+                        break;
+                    }
+
+                    let varName: string;
+                    if (def[strIndex + 1] === "(") {
+                        const oldIndex = strIndex;
+                        ++strIndex;
+                        varName = eatEnclosure(")");
+                        if (!varName) strIndex = oldIndex;
+                    }
+                    newToken = { kind: (char === "$") ? TokenKind.ParamRef : TokenKind.Parameter, content: param[0], type: param[1], name: varName };
                     break;
             }
 
@@ -648,21 +769,18 @@ namespace ts.pxtc {
         const parts: BlockPart[] = [];
         const parameters: BlockParameter[] = [];
 
-        const stack: TokenKind[] = [];
+        let stack: TokenKind[] = [];
         let open = 0;
         let currentLabel = ""
+
+        let labelStack: (Label | BlockPart)[] = [];
 
         for (let i = 0; i < tokens.length; i++) {
             const token = tokens[i].kind;
             const top = stack[stack.length - 1];
-
-            let wordEnd = false;
-            let styles: string[] = [];
-            if (open & TokenKind.Bold) styles.push("bold");
-            if (open & TokenKind.Italics) styles.push("italics");
-
             if (token & TokenKind.StyleMarks) {
-                wordEnd = true;
+                pushCurrentLabel(tokens[i].content);
+
                 if (token & open) {
                     if (top & token) {
                         stack.pop();
@@ -675,7 +793,8 @@ namespace ts.pxtc {
                         }
                     }
                     else {
-                        return undefined; // error: mismatched!
+                        // We encountered a mismatched mark, so clear previous styles
+                        collapseLabels();
                     }
                 }
                 else {
@@ -683,61 +802,52 @@ namespace ts.pxtc {
                     stack.push(token);
                 }
             }
-            else {
-                switch (token) {
-                    case TokenKind.Escape:
-                    case TokenKind.Word:
-                        currentLabel += tokens[i].content;
-                        break;
-                    case TokenKind.Pipe:
-                    case TokenKind.Parameter:
-                        if (open) {
-                            return undefined; // error: style marks should be closed
-                        }
-                    case TokenKind.Image: // deliberate fallthrough
-                    case TokenKind.TaggedText:
-                        wordEnd = true;
-                        break;
-                }
+            else if (token & TokenKind.Text) {
+                currentLabel += tokens[i].content;
+            }
+            else if (token & TokenKind.Unstylable) {
+                pushLabels();
             }
 
-            if (wordEnd && currentLabel) {
-                parts.push({ kind: "label", text: currentLabel, style: styles } as BlockLabel);
-                currentLabel = "";
-            }
-
+            /* tslint:disable:possible-timing-attack  (tslint thinks all variables named token are passwords...) */
             if (token == TokenKind.Parameter) {
-                const param: BlockParameter = { kind: "param", name: tokens[i].content, shadowBlockId: tokens[i].type };
+                const param: BlockParameter = { kind: "param", name: tokens[i].content, shadowBlockId: tokens[i].type, ref: false };
+                if (tokens[i].name) param.varName = tokens[i].name;
+                parts.push(param);
+                parameters.push(param);
+            }
+            else if (token == TokenKind.ParamRef) {
+                const param: BlockParameter = { kind: "param", name: tokens[i].content, shadowBlockId: tokens[i].type, ref: true };
+                if (tokens[i].name) param.varName = tokens[i].name;
                 parts.push(param);
                 parameters.push(param);
             }
             else if (token == TokenKind.Image) {
-                parts.push({ kind: "image", uri: tokens[i].content } as BlockImage);
+                pushCurrentLabel();
+                labelStack.push({ kind: "image", uri: tokens[i].content } as BlockImage);
             }
             else if (token == TokenKind.TaggedText) {
-                parts.push({ kind: "label", text: tokens[i].content, cssClass: tokens[i].type } as BlockLabel)
+                pushCurrentLabel();
+                labelStack.push({ kind: "label", text: tokens[i].content, cssClass: tokens[i].type } as BlockLabel)
             }
             else if (token == TokenKind.Pipe) {
                 parts.push({ kind: "break" });
             }
+            /* tslint:enable:possible-timing-attack */
         }
 
-        if (open) return undefined; // error: style marks should terminate
-
-        if (currentLabel) {
-            parts.push({ kind: "label", text: currentLabel, style: [] } as BlockLabel);
-        }
+        pushLabels();
 
         return { parts, parameters };
 
         function eatToken(pred: (c: string) => boolean, skipCurrent = false) {
             let current = "";
-            if (skipCurrent) ++strIndex
+            if (skipCurrent) strIndex++
             while (strIndex < def.length && pred(def[strIndex])) {
                 current += def[strIndex];
                 ++strIndex;
             }
-            if (current) --strIndex;
+            if (current) strIndex--;
             return current;
         }
 
@@ -747,6 +857,79 @@ namespace ts.pxtc {
             ++strIndex;
             return content;
         }
+
+        function collapseLabels() {
+            let combined = "";
+            let newStack: (Label | BlockPart)[] = [];
+            for (const item of labelStack) {
+                if (isBlockPart(item)) {
+                    newStack.push({
+                        content: combined,
+                        styles: 0
+                    });
+                    newStack.push(item);
+                    combined = "";
+                }
+                else {
+                    combined += item.content;
+                    if (item.endingToken) {
+                        combined += item.endingToken;
+                    }
+                }
+            }
+
+            labelStack = newStack;
+
+            if (combined) {
+                labelStack.push({
+                    content: combined,
+                    styles: 0
+                });
+            }
+
+            // Clear the style state as well
+            stack = [];
+            open = 0;
+        }
+
+        function pushLabels() {
+            pushCurrentLabel();
+
+            if (open) {
+                collapseLabels();
+            }
+
+            while (labelStack.length) {
+                const label = labelStack.shift();
+
+                if (isBlockPart(label)) {
+                    parts.push(label);
+                }
+                else {
+                    if (!label.content) continue;
+
+                    const styles: string[] = [];
+
+                    if (label.styles & TokenKind.Bold) styles.push("bold");
+                    if (label.styles & TokenKind.Italics) styles.push("italics");
+
+                    parts.push({ kind: "label", text: label.content, style: styles } as BlockLabel);
+                }
+            }
+        }
+
+        function pushCurrentLabel(endingToken?: string) {
+            labelStack.push({
+                content: currentLabel,
+                styles: open,
+                endingToken
+            });
+            currentLabel = "";
+        }
+    }
+
+    function isBlockPart(p: Label | BlockPart): p is BlockPart {
+        return !!((p as BlockPart).kind);
     }
 
     // TODO should be internal
@@ -818,6 +1001,7 @@ namespace ts.pxtc {
         export const UF2_FLAG_NONE = 0x00000000
         export const UF2_FLAG_NOFLASH = 0x00000001
         export const UF2_FLAG_FILE = 0x00001000
+        export const UF2_FLAG_FAMILY_ID_PRESENT = 0x00002000
 
         export interface Block {
             flags: number;
@@ -826,6 +1010,7 @@ namespace ts.pxtc {
             blockNo: number;
             numBlocks: number;
             fileSize: number;
+            familyId: number;
             filename?: string;
             data: Uint8Array;
         }
@@ -843,6 +1028,8 @@ namespace ts.pxtc {
             if (payloadSize > 476)
                 payloadSize = 256
             let filename: string = null
+            let familyId = 0
+            let fileSize = 0
             if (flags & UF2_FLAG_FILE) {
                 let fnbuf = block.slice(32 + payloadSize)
                 let len = fnbuf.indexOf(0)
@@ -850,14 +1037,21 @@ namespace ts.pxtc {
                     fnbuf = fnbuf.slice(0, len)
                 }
                 filename = U.fromUTF8(U.uint8ArrayToString(fnbuf))
+                fileSize = wordAt(28)
             }
+
+            if (flags & UF2_FLAG_FAMILY_ID_PRESENT) {
+                familyId = wordAt(28)
+            }
+
             return {
                 flags,
                 targetAddr: wordAt(12),
                 payloadSize,
                 blockNo: wordAt(20),
                 numBlocks: wordAt(24),
-                fileSize: wordAt(28),
+                fileSize,
+                familyId,
                 data: block.slice(32, 32 + payloadSize),
                 filename
             }
@@ -877,7 +1071,7 @@ namespace ts.pxtc {
             buf: Uint8Array;
         }
 
-        export function toBin(blocks: Uint8Array): ShiftedBuffer {
+        export function toBin(blocks: Uint8Array, endAddr: number = undefined): ShiftedBuffer {
             if (blocks.length < 512)
                 return null
             let curraddr = -1
@@ -887,6 +1081,7 @@ namespace ts.pxtc {
                 let ptr = i * 512
                 let bl = parseBlock(blocks.slice(ptr, ptr + 512))
                 if (!bl) continue
+                if (endAddr && bl.targetAddr + 256 > endAddr) break;
                 if (curraddr == -1) {
                     curraddr = bl.targetAddr
                     appstartaddr = curraddr
@@ -946,15 +1141,19 @@ namespace ts.pxtc {
             ptrs: number[];
             filename?: string;
             filesize: number;
+            familyId: number;
         }
 
-        export function newBlockFile(): BlockFile {
+        export function newBlockFile(familyId?: string | number): BlockFile {
+            if (typeof familyId == "string")
+                familyId = parseInt(familyId)
             return {
                 currBlock: null,
                 currPtr: -1,
                 blocks: [],
                 ptrs: [],
-                filesize: 0
+                filesize: 0,
+                familyId: familyId || 0
             }
         }
 
@@ -1019,7 +1218,7 @@ namespace ts.pxtc {
             return res
         }
 
-        export function writeBytes(f: BlockFile, addr: number, bytes: ArrayLike<number>) {
+        export function writeBytes(f: BlockFile, addr: number, bytes: ArrayLike<number>, flags = 0) {
             let currBlock = f.currBlock
             let needAddr = addr >> 8
 
@@ -1047,12 +1246,17 @@ namespace ts.pxtc {
                 }
                 if (!currBlock) {
                     currBlock = new Uint8Array(512)
+                    if (f.filename)
+                        flags |= UF2_FLAG_FILE
+                    else if (f.familyId)
+                        flags |= UF2_FLAG_FAMILY_ID_PRESENT
                     setWord(currBlock, 0, UF2_MAGIC_START0)
                     setWord(currBlock, 4, UF2_MAGIC_START1)
-                    setWord(currBlock, 8, f.filename ? UF2_FLAG_FILE : UF2_FLAG_NONE)
+                    setWord(currBlock, 8, flags)
                     setWord(currBlock, 12, needAddr << 8)
                     setWord(currBlock, 16, 256)
                     setWord(currBlock, 20, f.blocks.length)
+                    setWord(currBlock, 28, f.familyId)
                     setWord(currBlock, 512 - 4, UF2_MAGIC_END)
                     if (f.filename) {
                         U.memcpy(currBlock, 32 + 256, U.stringToUint8Array(U.toUTF8(f.filename)))
@@ -1099,14 +1303,23 @@ namespace ts.pxtc.service {
     export interface OpArg {
         fileName?: string;
         fileContent?: string;
+        infoType?: InfoType;
         position?: number;
         options?: CompileOptions;
         search?: SearchOptions;
         format?: FormatOptions;
+        blocks?: BlocksOptions;
+        projectSearch?: ProjectSearchOptions;
+        snippet?: SnippetOptions;
+    }
+
+    export interface SnippetOptions {
+        qName: string;
+        python?: boolean;
     }
 
     export interface SearchOptions {
-        subset?: pxt.Map<boolean>;
+        subset?: pxt.Map<boolean | string>;
         term: string;
         localizedApis?: ApisInfo;
         localizedStrings?: pxt.Map<string>;
@@ -1125,14 +1338,21 @@ namespace ts.pxtc.service {
         namespace?: string;
         jsdoc?: string;
         field?: [string, string];
+        localizedCategory?: string;
+        builtinBlock?: boolean;
     }
-}
 
-namespace ts.pxtc.ir {
+    export interface ProjectSearchOptions {
+        term: string;
+        headers: ProjectSearchInfo[];
+    }
 
-    export enum CallingConvention {
-        Plain,
-        Async,
-        Promise,
+    export interface ProjectSearchInfo {
+        name: string;
+        id?: string;
+    }
+
+    export interface BlocksOptions {
+        bannedCategories?: string[];
     }
 }

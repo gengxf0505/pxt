@@ -21,38 +21,30 @@ export interface SpawnOptions {
     pipe?: boolean;
     input?: string;
     silent?: boolean;
+    envOverrides?: pxt.Map<string>;
+    allowNonZeroExit?: boolean;
 }
 
 //This should be correct at startup when running from command line
-//When running inside Electron it gets updated to the correct path
-export var targetDir: string = process.cwd();
-//When running the Electron app, this will be updated based on targetDir
-export var pxtCoreDir: string = path.join(__dirname, "..");
+export let targetDir: string = process.cwd();
+export let pxtCoreDir: string = path.join(__dirname, "..");
+
+export let cliFinalizers: (() => Promise<void>)[] = [];
+
+export function addCliFinalizer(f: () => Promise<void>) {
+    cliFinalizers.push(f)
+}
+
+export function runCliFinalizersAsync() {
+    let fins = cliFinalizers
+    cliFinalizers = []
+    return Promise.mapSeries(fins, f => f())
+        .then(() => { })
+}
 
 export function setTargetDir(dir: string) {
     targetDir = dir;
-
-    // The target should expose the path to its bundled pxt-core
-    let fallback = false;
-    let target: any;
-
-    try {
-        target = require(targetDir);
-    }
-    catch (e) {
-        // If we can't require the target, fallback to default location
-        fallback = true;
-    }
-
-    if (fallback || !target.pxtCoreDir || !fs.existsSync(target.pxtCoreDir)) {
-        pxtCoreDir = path.join(__dirname, "..");
-
-        if (pxtCoreDir !== targetDir) {
-            pxt.log("Could not determine target's pxt-core location, falling back to default: " + pxtCoreDir);
-        }
-    } else {
-        pxtCoreDir = target.pxtCoreDir;
-    }
+    (<any>module).paths.push(path.join(targetDir, "node_modules"));
 }
 
 export function readResAsync(g: events.EventEmitter) {
@@ -85,7 +77,7 @@ export function spawnWithPipeAsync(opts: SpawnOptions) {
     return new Promise<Buffer>((resolve, reject) => {
         let ch = child_process.spawn(opts.cmd, opts.args, {
             cwd: opts.cwd,
-            env: process.env,
+            env: opts.envOverrides ? extendEnv(process.env, opts.envOverrides) : process.env,
             stdio: opts.pipe ? [opts.input == null ? process.stdin : "pipe", "pipe", process.stderr] : "inherit",
             shell: opts.shell || false
         } as any)
@@ -98,7 +90,7 @@ export function spawnWithPipeAsync(opts: SpawnOptions) {
                 }
             })
         ch.on('close', (code: number) => {
-            if (code != 0)
+            if (code != 0 && !opts.allowNonZeroExit)
                 reject(new Error("Exit code: " + code + " from " + info))
             resolve(Buffer.concat(bufs))
         });
@@ -107,12 +99,31 @@ export function spawnWithPipeAsync(opts: SpawnOptions) {
     })
 }
 
+function extendEnv(base: any, overrides: any) {
+    let res: any = {};
+    Object.keys(base).forEach(key => res[key] = base[key])
+    Object.keys(overrides).forEach(key => res[key] = overrides[key])
+    return res;
+}
+
 export function addCmd(name: string) {
     return name + (/^win/.test(process.platform) ? ".cmd" : "")
 }
 
 export function runNpmAsync(...args: string[]) {
     return runNpmAsyncWithCwd(".", ...args);
+}
+
+export interface NpmRegistry {
+    _id: string;
+    _name: string;
+    "dist-tags": pxt.Map<string>;
+    "versions": pxt.Map<any>;
+}
+
+export function npmRegistryAsync(pkg: string): Promise<NpmRegistry> {
+    // TODO: use token if available
+    return Util.httpGetJsonAsync(`https://registry.npmjs.org/${pkg}`);
 }
 
 export function runNpmAsyncWithCwd(cwd: string, ...args: string[]) {
@@ -169,7 +180,9 @@ function nodeHttpRequestAsync(options: Util.HttpRequestOptions): Promise<Util.Ht
     let u = <http.RequestOptions><any>url.parse(options.url)
 
     if (u.protocol == "https:") isHttps = true
+    /* tslint:disable:no-http-string */
     else if (u.protocol == "http:") isHttps = false
+    /* tslint:enable:no-http-string */
     else return Promise.reject("bad protocol: " + u.protocol)
 
     u.headers = Util.clone(options.headers) || {}
@@ -276,16 +289,24 @@ export function readPkgConfig(dir: string) {
     pxt.debug("readPkgConfig in " + dir)
     const fn = path.join(dir, pxt.CONFIG_NAME)
     const js: pxt.PackageConfig = readJson(fn)
-    if (js.additionalFilePath) {
-        let addjson = path.join(dir, js.additionalFilePath, pxt.CONFIG_NAME)
-        pxt.debug("additional pxt.json: " + addjson)
-        const js2: any = readJson(addjson)
+
+    const ap = js.additionalFilePath
+    if (ap) {
+        const adddir = path.join(dir, ap)
+        pxt.debug("additional pxt.json: " + adddir)
+        const js2 = readPkgConfig(adddir)
         for (let k of Object.keys(js2)) {
             if (!js.hasOwnProperty(k)) {
-                (js as any)[k] = js2[k]
+                (js as any)[k] = (js2 as any)[k]
             }
         }
+        js.additionalFilePaths = [ap].concat(js2.additionalFilePaths.map(d => path.join(ap, d)))
+    } else {
+        js.additionalFilePaths = []
     }
+    // don't inject version number
+    // as they get serialized later on
+    // if (!js.targetVersions) js.targetVersions = pxt.appTarget.versions;
     return js
 }
 
@@ -304,7 +325,7 @@ export function pathToPtr(path: string) {
 }
 
 export function mkdirP(thePath: string) {
-    if (thePath == ".") return;
+    if (thePath == "." || !thePath) return;
     if (!fs.existsSync(thePath)) {
         mkdirP(path.dirname(thePath))
         fs.mkdirSync(thePath)
@@ -361,6 +382,15 @@ export function existsDirSync(name: string): boolean {
     }
     catch (e) {
         return false;
+    }
+}
+
+export function writeFileSync(p: string, data: any, options?: { encoding?: string | null; mode?: number | string; flag?: string; } | string | null) {
+    mkdirP(path.dirname(p));
+    fs.writeFileSync(p, data, options);
+    if (pxt.options.debug) {
+        const stats = fs.statSync(p);
+        pxt.log(`  + ${p} ${stats.size > 1000000 ? (stats.size / 1000000).toFixed(2) + ' m' : stats.size > 1000 ? (stats.size / 1000).toFixed(2) + 'k' : stats.size}b`)
     }
 }
 
@@ -476,8 +506,8 @@ export function resolveMd(root: string, pathname: string): string {
         dirs.push(d)
 
         let cfg = readPkgConfig(path.join(d, ".."))
-        if (cfg.additionalFilePath)
-            dirs.push(path.join(d, "..", cfg.additionalFilePath, "docs"))
+        for (let add of cfg.additionalFilePaths)
+            dirs.push(path.join(d, "..", add, "docs"))
     }
     for (let d of dirs) {
         let template = tryRead(path.join(d, pathname))
@@ -485,6 +515,32 @@ export function resolveMd(root: string, pathname: string): string {
             return pxt.docs.augmentDocs(template, targetMd)
     }
     return undefined;
+}
+
+export function lazyDependencies(): pxt.Map<string> {
+    // find pxt-core package
+    const deps: pxt.Map<string> = {};
+    [path.join("node_modules", "pxt-core", "package.json"), "package.json"]
+        .filter(f => fs.existsSync(f))
+        .map(f => readJson(f))
+        .forEach(config => config && config.lazyDependencies && Util.jsonMergeFrom(deps, config.lazyDependencies))
+    return deps;
+}
+
+export function lazyRequire(name: string, install = false): any {
+    /* tslint:disable:non-literal-require */
+    let r: any;
+    try {
+        r = require(name);
+    } catch (e) {
+        pxt.debug(e);
+        pxt.debug((<any>require.resolve).paths(name));
+        r = undefined;
+    }
+    if (!r && install)
+        pxt.log(`package "${name}" failed to load, run "pxt npminstallnative" to install native depencencies`)
+    return r;
+    /* tslint:enable:non-literal-require */
 }
 
 init();

@@ -123,9 +123,10 @@ namespace pxsim.instructions {
         crocClips?: boolean
     };
 
-    function mkBoardImgSvg(def: string | BoardImageDefinition): visuals.SVGElAndSize {
+    function mkBoardImgSvg(def: BoardDefinition): visuals.SVGElAndSize {
         const boardView = pxsim.visuals.mkBoardView({
-            visual: def
+            visual: def.visual,
+            boardDef: def
         });
         return boardView.getView();
     }
@@ -354,6 +355,7 @@ namespace pxsim.instructions {
         };
         let boardHost = new visuals.BoardHost(pxsim.visuals.mkBoardView({
             visual: opts.boardDef.visual,
+            boardDef: opts.boardDef,
             wireframe: opts.wireframe
         }), opts);
         let view = boardHost.getView();
@@ -396,7 +398,8 @@ namespace pxsim.instructions {
             let wires = props.stepToWires[i];
             if (wires) {
                 wires.forEach(w => {
-                    let wire = board.addWire(w)
+                    let wire = board.addWire(w);
+                    if (!wire) return;
                     //last step
                     if (i === step) {
                         //location highlights
@@ -406,7 +409,7 @@ namespace pxsim.instructions {
                             board.highlightBoardPin((<BoardLoc>w.start).pin);
                         }
                         if (w.end.type == "breadboard") {
-                            let lbls = board.highlightBreadboardPin((<BBLoc>w.end));
+                            board.highlightBreadboardPin((<BBLoc>w.end));
                         } else {
                             board.highlightBoardPin((<BoardLoc>w.end).pin);
                         }
@@ -428,7 +431,7 @@ namespace pxsim.instructions {
         let panel = mkPanel();
 
         // board and breadboard
-        let boardImg = mkBoardImgSvg(props.boardDef.visual);
+        let boardImg = mkBoardImgSvg(props.boardDef);
         let board = wrapSvg(boardImg, { left: QUANT_LBL(1), leftSize: QUANT_LBL_SIZE, cmpScale: PARTS_BOARD_SCALE });
         panel.appendChild(board);
         let bbRaw = mkBBSvg();
@@ -455,12 +458,13 @@ namespace pxsim.instructions {
         // wires
         props.allWireColors.forEach(clr => {
             let quant = props.colorToWires[clr].length;
+            let style = props.boardDef.pinStyles[clr] || "female";
             let cmp = mkCmpDiv("wire", {
                 left: QUANT_LBL(quant),
                 leftSize: WIRE_QUANT_LBL_SIZE,
                 wireClr: clr,
                 cmpScale: PARTS_WIRE_SCALE,
-                crocClips: props.boardDef.useCrocClips
+                crocClips: style == "croc"
             })
             addClass(cmp, "partslist-wire");
             panel.appendChild(cmp);
@@ -499,6 +503,10 @@ namespace pxsim.instructions {
                 return (<BoardLoc>loc).pin;
         };
         wires.forEach(w => {
+            let croc = false;
+            if (w.end.type == "dalboard") {
+                croc = props.boardDef.pinStyles[(<BoardLoc>w.end).pin] == "croc";
+            }
             let cmp = mkCmpDiv("wire", {
                 top: mkLabel(w.end),
                 topSize: LOC_LBL_SIZE,
@@ -506,7 +514,7 @@ namespace pxsim.instructions {
                 botSize: LOC_LBL_SIZE,
                 wireClr: w.color,
                 cmpHeight: REQ_WIRE_HEIGHT,
-                crocClips: props.boardDef.useCrocClips
+                crocClips: croc
             })
             addClass(cmp, "cmp-div");
             reqsDiv.appendChild(cmp);
@@ -571,9 +579,12 @@ namespace pxsim.instructions {
         partDefinitions: Map<PartDefinition>;
         fnArgs: any;
         configData: pxsim.ConfigData;
+        print?: boolean;
     }
 
     export function renderParts(container: HTMLElement, options: RenderPartsOptions) {
+        if (!options.boardDef.pinStyles)
+            options.boardDef.pinStyles = {};
         if (options.configData)
             pxsim.setConfigData(options.configData.cfg, options.configData.cfgKey);
 
@@ -617,8 +628,11 @@ namespace pxsim.instructions {
         }
 
         //final
-        let finalPanel = mkFinalPanel(props);
-        container.appendChild(finalPanel);
+        //let finalPanel = mkFinalPanel(props);
+        //container.appendChild(finalPanel);
+
+        if (options.print)
+            pxsim.print(2000);
     }
 
     export function renderInstructions(msg: SimulatorInstructionsMessage) {

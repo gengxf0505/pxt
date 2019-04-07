@@ -1,11 +1,7 @@
-import * as core from "./core";
-
 import Cloud = pxt.Cloud;
 import U = pxt.Util;
 
 let iface: pxt.worker.Iface
-let devPath: Promise<string>
-
 
 interface HidDevice {
     vendorId: number; // 9025,
@@ -49,7 +45,7 @@ function onOOB(v: OOB) {
 
 function init() {
     if (!iface) {
-        if (!Cloud.isLocalHost() || !Cloud.localToken)
+        if (!pxt.BrowserUtils.isLocalHost() || !Cloud.localToken)
             return;
         pxt.debug('initializing hid pipe');
         iface = pxt.worker.makeWebSocket(
@@ -59,10 +55,10 @@ function init() {
 
 export function shouldUse() {
     let serial = pxt.appTarget.serial
-    return serial && serial.useHF2 && (Cloud.isLocalHost() && !!Cloud.localToken || pxt.winrt.isWinRT());
+    return serial && serial.useHF2 && (pxt.BrowserUtils.isLocalHost() && !!Cloud.localToken || pxt.winrt.isWinRT());
 }
 
-function mkBridgeAsync(): Promise<pxt.HF2.PacketIO> {
+export function mkBridgeAsync(): Promise<pxt.HF2.PacketIO> {
     init()
     let raw = false
     if (pxt.appTarget.serial && pxt.appTarget.serial.rawHID)
@@ -89,7 +85,7 @@ class BridgeIO implements pxt.HF2.PacketIO {
     onOOB(v: OOB) {
         if (v.op == "serial") {
             this.onSerial(U.fromHex(v.result.data), v.result.isError)
-        } else if (v.op = "event") {
+        } else if (v.op == "event") {
             this.onEvent(U.fromHex(v.result.data))
         }
     }

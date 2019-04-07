@@ -31,9 +31,13 @@ namespace pxt.blocks {
 
     let placeholders: Map<Map<any>> = {};
 
+    export function backtickLit(s: string) {
+        return "`" + s.replace(/[\\`${}]/g, f => "\\" + f) + "`"
+    }
+
     export function stringLit(s: string) {
         if (s.length > 20 && /\n/.test(s))
-            return "`" + s.replace(/[\\`${}]/g, f => "\\" + f) + "`"
+            return backtickLit(s)
         else return JSON.stringify(s)
     }
 
@@ -180,11 +184,33 @@ namespace pxt.blocks {
         }
 
         export function mkComment(text: string) {
-            return mkStmt(mkText("// " + text))
+            return mkText("// " + text)
+        }
+
+        export function mkMultiComment(text: string) {
+            let group = [
+                mkText("/**"),
+                mkNewLine()
+            ];
+            text.split("\n").forEach((c, i, arr) => {
+                if (c) {
+                    group.push(mkText(" * " + c));
+                    group.push(mkNewLine());
+                    // Add an extra line so we can convert it back to new lines
+                    if (i < arr.length - 1) {
+                        group.push(mkText(" * "));
+                        group.push(mkNewLine());
+                    }
+                }
+            });
+            return mkGroup(group.concat([
+                mkText(" */"),
+                mkNewLine()
+            ]));
         }
 
         export function mkAssign(x: JsNode, e: JsNode): JsNode {
-            return mkStmt(mkSimpleCall("=", [x, e]))
+            return mkSimpleCall("=", [x, e])
         }
 
         export function mkParenthesizedExpression(expression: JsNode): JsNode {

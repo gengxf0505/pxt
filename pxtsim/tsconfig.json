@@ -3,11 +3,12 @@
         "target": "es5",
         "noImplicitAny": true,
         "noImplicitReturns": true,
+        "noImplicitThis": true,
         "declaration": true,
         "out": "../built/pxtsim.js",
         "newLine": "LF",
         "sourceMap": false,
         "lib": ["dom", "dom.iterable", "scripthost", "es6"],
-        "types": ["jquery", "bluebird"]
+        "types": ["bluebird"]
     }
 }

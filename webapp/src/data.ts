@@ -1,7 +1,5 @@
 import * as React from "react";
-import * as workspace from "./workspace";
 import * as core from "./core";
-import * as gallery from "./gallery";
 
 export type Action = () => void;
 export type AnyComponent = Component<any, any>;
@@ -19,8 +17,19 @@ interface CacheEntry {
     api: VirtualApi;
 }
 
+export enum FetchStatus {
+    Pending,
+    Complete,
+    Error,
+    Offline
+};
+
+export interface DataFetchResult<T> {
+    data?: T;
+    status: FetchStatus;
+}
+
 const virtualApis: pxt.Map<VirtualApi> = {}
-let targetConfig: pxt.TargetConfig = undefined;
 
 mountVirtualApi("cloud", {
     getAsync: p => Cloud.privateGetAsync(stripProtocol(p)).catch(core.handleNetworkError),
@@ -38,7 +47,7 @@ mountVirtualApi("cloud-search", {
 })
 
 mountVirtualApi("gallery", {
-    getAsync: p => gallery.loadGalleryAsync(stripProtocol(decodeURIComponent(p))).catch((e) => {
+    getAsync: p => pxt.gallery.loadGalleryAsync(stripProtocol(decodeURIComponent(p))).catch((e) => {
         return Promise.resolve(e);
     }),
     expirationTime: p => 3600 * 1000
@@ -66,10 +75,27 @@ mountVirtualApi("gh-pkgcfg", {
     isOffline: () => !Cloud.isOnline(),
 })
 
+let targetConfigPromise: Promise<pxt.TargetConfig> = undefined;
 mountVirtualApi("target-config", {
-    getAsync: query =>
-        pxt.targetConfigAsync().catch(core.handleNetworkError),
-    expirationTime: p => 60 * 1000,
+    getAsync: query => {
+        if (!targetConfigPromise)
+            targetConfigPromise = pxt.targetConfigAsync()
+                .then(js => {
+                    if (js) {
+                        pxt.storage.setLocal("targetconfig", JSON.stringify(js))
+                        invalidate("target-config");
+                        invalidate("gh-search");
+                        invalidate("gh-pkgcfg");
+                    }
+                    return js;
+                })
+                .catch(core.handleNetworkError);
+        // return cached value or try again
+        const cfg = JSON.parse(pxt.storage.getLocal("targetconfig") || "null") as pxt.TargetConfig;
+        if (cfg) return Promise.resolve(cfg);
+        return targetConfigPromise;
+    },
+    expirationTime: p => 24 * 3600 * 1000,
     isOffline: () => !Cloud.isOnline()
 })
 
@@ -141,7 +167,7 @@ function notify(ce: CacheEntry) {
     }
 
     if (ce.components.length > 0)
-        ce.components.forEach(c => Util.nextTick(() =>  c.forceUpdate()))
+        ce.components.forEach(c => Util.nextTick(() => c.forceUpdate()))
 }
 
 function getVirtualApi(path: string) {
@@ -186,14 +212,31 @@ function lookup(path: string) {
     return cachedData[path]
 }
 
-function getCached(component: AnyComponent, path: string) {
+function getCached(component: AnyComponent, path: string): DataFetchResult<any> {
     subscribe(component, path)
     let r = lookup(path)
     if (r.api.isSync)
-        return r.api.getSync(r.path)
-    if (expired(r) || r.data instanceof Error)
-        queue(r)
-    return r.data
+        return {
+            data: r.api.getSync(r.path),
+            status: FetchStatus.Complete
+        }
+
+    let fetchRes: DataFetchResult<any> = {
+        data: r.data,
+        status: FetchStatus.Complete
+    };
+
+    if (expired(r) || r.data instanceof Error) {
+        fetchRes.status = r.data instanceof Error ? FetchStatus.Error : FetchStatus.Pending;
+        if (r.api.isOffline && r.api.isOffline()) {
+            // The request will not be requeued so we don't want to show it as pending
+            fetchRes.status = FetchStatus.Offline;
+        } else {
+            queue(r)
+        }
+    }
+
+    return fetchRes;
 }
 
 //
@@ -206,6 +249,7 @@ export interface VirtualApi {
     isSync?: boolean;
     expirationTime?(path: string): number; // in milliseconds
     isOffline?: () => boolean;
+    onInvalidated?: () => void;
 }
 
 export function mountVirtualApi(protocol: string, handler: VirtualApi) {
@@ -229,6 +273,8 @@ export function invalidate(prefix: string) {
             ce.lastRefresh = 0;
             if (ce.components.length > 0)
                 queue(lookup(ce.path))
+            if (ce.api.onInvalidated)
+                ce.api.onInvalidated();
         }
     })
 }
@@ -260,6 +306,14 @@ export class Component<TProps, TState> extends React.Component<TProps, TState> {
     }
 
     getData(path: string) {
+        const fetchResult = this.getDataWithStatus(path);
+        return fetchResult.data;
+    }
+
+    /**
+     * Like getData, but the data is wrapped in a result object that indicates the status of the fetch operation
+     */
+    getDataWithStatus(path: string): DataFetchResult<any> {
         if (!this.renderCoreOk)
             Util.oops("Override renderCore() not render()")
         return getCached(this, path)
@@ -282,31 +336,36 @@ export class Component<TProps, TState> extends React.Component<TProps, TState> {
         this.renderCoreOk = true;
         return this.renderCore();
     }
+
+    setStateAsync<K extends keyof TState>(state: Pick<TState, K>): Promise<void> {
+        return new Promise((resolve, reject) => {
+            this.setState(state, () => {
+                resolve();
+            })
+        })
+    }
 }
 
-export function wrapWorkspace(ws: pxt.workspace.WorkspaceProvider): pxt.workspace.WorkspaceProvider {
-    return {
-        initAsync: ws.initAsync,
-        resetAsync: () => ws.resetAsync().then(() => {
-            clearCache()
-        }),
-        getHeaders: ws.getHeaders,
-        getHeader: ws.getHeader,
-        syncAsync: () => ws.syncAsync().then((state) => {
-            invalidate("header:*");
-            invalidate("text:*");
-            return state;
-        }),
-        getTextAsync: ws.getTextAsync,
-        saveAsync: (h, t) => ws.saveAsync(h, t).then(() => {
-            invalidate("header:" + h.id);
-            invalidate("text:" + h.id);
-        }),
-        saveToCloudAsync: ws.saveToCloudAsync,
-        saveScreenshotAsync: ws.saveScreenshotAsync,
-        installAsync: ws.installAsync
-    };
-}
+export class PureComponent<TProps, TState> extends React.PureComponent<TProps, TState> {
+    renderCoreOk = false;
 
+    constructor(props: TProps) {
+        super(props);
+        this.state = <any>{}
+    }
+
+    child(selector: string) {
+        return core.findChild(this, selector)
+    }
+
+    renderCore(): JSX.Element {
+        return null;
+    }
+
+    render() {
+        this.renderCoreOk = true;
+        return this.renderCore();
+    }
+}
 
 loadCache();

@@ -20,8 +20,8 @@ namespace pxsim {
     }
 
     export class BreakpointMap {
-        public fileMap: {[index: string]: [number, DebugProtocol.Breakpoint][]} = {};
-        public idMap: {[index: number]: DebugProtocol.Breakpoint} = {};
+        public fileMap: { [index: string]: [number, DebugProtocol.Breakpoint][] } = {};
+        public idMap: { [index: number]: DebugProtocol.Breakpoint } = {};
 
         constructor(breakpoints: [number, DebugProtocol.Breakpoint][]) {
             breakpoints.forEach(tuple => {
@@ -83,7 +83,7 @@ namespace pxsim {
         }
     }
 
-    export function getBreakpointMsg(s: pxsim.StackFrame, brkId: number) {
+    export function dumpHeap(v: any, heap: Map<any>, fields?: string[]): Variables {
         function valToJSON(v: any) {
             switch (typeof v) {
                 case "string":
@@ -91,49 +91,114 @@ namespace pxsim {
                 case "boolean":
                     return v;
                 case "function":
-                    return { text: "(function)" }
+                    return {
+                        text: "(function)",
+                        type: "function",
+                    }
                 case "undefined":
                     return null;
                 case "object":
                     if (!v) return null;
-                    if (v instanceof RefObject)
-                        return { id: (v as RefObject).id }
-                    return { text: "(object)" }
+                    if (v instanceof RefObject) {
+                        heap[(v as RefObject).id] = v;
+                        let preview = RefObject.toDebugString(v);
+                        let type = preview.startsWith('[') ? "array" : preview;
+                        return {
+                            id: (v as RefObject).id,
+                            preview: preview,
+                            hasFields: (v as any).fields !== null || preview.startsWith('['),
+                            type: type,
+                        }
+                    }
+                    if (v._width && v._height) {
+                        return {
+                            text: v._width + 'x' + v._height,
+                            type: "image",
+                        }
+                    }
+                    return {
+                        text: "(object)",
+                        type: "object",
+                    }
                 default:
                     throw new Error();
             }
         }
-
-        function frameVars(frame: Variables) {
-            let r: Variables = {}
+        function frameVars(frame: any, fields?: string[]) {
+            const r: Variables = {}
             for (let k of Object.keys(frame)) {
-                if (/___\d+$/.test(k)) {
-                    r[k] = valToJSON(frame[k])
+                // skip members starting with __
+                if (!/^__/.test(k) && /___\d+$/.test(k)) {
+                    r[k.replace(/___\d+$/, '')] = valToJSON(frame[k])
                 }
+            }
+            if (frame.fields && fields) {
+                // Fields of an object.
+                for (let k of fields) {
+                    k = k.substring(k.lastIndexOf(".") + 1);
+                    r[k] = valToJSON(evalGetter(frame.vtable.iface[k], frame));
+                }
+            }
+            if (frame.fields) {
+                for (let k of Object.keys(frame.fields).filter(field => !field.startsWith('_'))) {
+                    r[k.replace(/___\d+$/, '')] = valToJSON(frame.fields[k])
+                }
+            } else if (Array.isArray(frame.data)) {
+                // This is an Array.
+                (frame.data as any[]).forEach((element, index) => {
+                    r[index] = valToJSON(element);
+                });
             }
             return r
         }
 
-        let r: DebuggerBreakpointMessage = {
+        return frameVars(v, fields);
+    }
+
+    function evalGetter(fn: LabelFn, target: RefObject) {
+        // This function evaluates a getter, and we assume it doesn't have any side effects.
+        let parentFrame: any = {
+        };
+
+        // We create a dummy stack frame
+        let stackFrame: any = {
+            pc: 0,
+            arg0: target,
+            fn,
+            parent: parentFrame
+        };
+
+        // And we evaluate the getter
+        while (stackFrame.fn) {
+            stackFrame = stackFrame.fn(stackFrame as any);
+        }
+
+        return stackFrame.retval;
+    }
+
+    export function getBreakpointMsg(s: pxsim.StackFrame, brkId: number): { msg: DebuggerBreakpointMessage, heap: Map<any> } {
+        const heap: pxsim.Map<any> = {};
+
+        const msg: DebuggerBreakpointMessage = {
             type: "debugger",
             subtype: "breakpoint",
             breakpointId: brkId,
-            globals: frameVars(runtime.globals),
-            stackframes: []
+            globals: dumpHeap(runtime.globals, heap),
+            stackframes: [],
         }
 
         while (s != null) {
             let info = s.fn ? (s.fn as any).info : null
             if (info)
-                r.stackframes.push({
-                    locals: frameVars(s),
+                msg.stackframes.push({
+                    locals: dumpHeap(s, heap),
                     funcInfo: info,
                     breakpointId: s.lastBrkId
                 })
             s = s.parent
         }
 
-        return r
+        return { msg, heap };
     }
 
 
@@ -268,7 +333,7 @@ namespace pxsim {
         }
 
         protected threadsRequest(response: DebugProtocol.ThreadsResponse): void {
-            response.body = { threads: [{ id: SimDebugSession.THREAD_ID, name: "main"}] }
+            response.body = { threads: [{ id: SimDebugSession.THREAD_ID, name: "main" }] }
             this.sendResponse(response);
         }
 
@@ -301,7 +366,8 @@ namespace pxsim {
             this.state = new StoppedState(this.lastBreak, this.breakpoints, this.projectDir);
 
             if (breakMsg.exceptionMessage) {
-                this.sendEvent(new protocol.StoppedEvent("exception", SimDebugSession.THREAD_ID, breakMsg.exceptionMessage));
+                const message = breakMsg.exceptionMessage.replace(/___\d+/g, '');
+                this.sendEvent(new protocol.StoppedEvent("exception", SimDebugSession.THREAD_ID, message));
             }
             else {
                 this.sendEvent(new protocol.StoppedEvent("breakpoint", SimDebugSession.THREAD_ID));
@@ -326,7 +392,8 @@ namespace pxsim {
                 case SimulatorState.Stopped:
                     this.sendEvent(new protocol.TerminatedEvent())
                     break;
-                case SimulatorState.Unloaded:
+                //case SimulatorState.Unloaded:
+                //case SimulatorState.Pending:
                 default:
             }
         }
@@ -389,7 +456,7 @@ namespace pxsim {
          * Get stack frames for current breakpoint.
          */
         getFrames(): DebugProtocol.StackFrame[] {
-            return this._message.stackframes.map((s: SimFrame, i: number) => {;
+            return this._message.stackframes.map((s: SimFrame, i: number) => {
                 const bp = this._map.getById(s.breakpointId);
                 if (bp) {
                     this._frames[s.breakpointId] = s;

@@ -2,18 +2,8 @@
 /// <reference path="../built/pxtlib.d.ts" />
 
 namespace pxt.blocks {
-    let workspace: B.Workspace;
+    let workspace: Blockly.WorkspaceSvg;
     let blocklyDiv: HTMLElement;
-
-    function align(ws: B.Workspace, emPixels: number) {
-        let blocks = ws.getTopBlocks(true);
-        let y = 0
-        blocks.forEach(block => {
-            block.moveBy(0, y)
-            y += block.getHeightWidth().height
-            y += emPixels; //buffer
-        })
-    }
 
     export enum BlockLayout {
         Align = 1,
@@ -31,9 +21,11 @@ namespace pxt.blocks {
         package?: string;
         snippetMode?: boolean;
         useViewWidth?: boolean;
+        splitSvg?: boolean;
+        forceCompilation?: boolean;
     }
 
-    export function render(blocksXml: string, options: BlocksRenderOptions = { emPixels: 14, layout: BlockLayout.Flow }): SVGSVGElement {
+    export function render(blocksXml: string, options: BlocksRenderOptions = { emPixels: 18, layout: BlockLayout.Align }): Element {
         if (!workspace) {
             blocklyDiv = document.createElement("div");
             blocklyDiv.style.position = "absolute";
@@ -48,18 +40,18 @@ namespace pxt.blocks {
                 sound: false,
                 media: pxt.webConfig.commitCdnUrl + "blockly/media/",
                 rtl: Util.isUserLanguageRtl()
-            });
+            }) as Blockly.WorkspaceSvg;
         }
 
-        workspace.clear();
+        pxt.blocks.clearWithoutEvents(workspace);
         try {
             let text = blocksXml || `<xml xmlns="http://www.w3.org/1999/xhtml"></xml>`;
             let xml = Blockly.Xml.textToDom(text);
-            Blockly.Xml.domToWorkspace(xml, workspace);
-
-            switch (options.layout) {
+            pxt.blocks.domToWorkspaceNoEvents(xml, workspace);
+            const layout = options.splitSvg ? BlockLayout.Align : (options.layout || BlockLayout.Flow);
+            switch (layout) {
                 case BlockLayout.Align:
-                    pxt.blocks.layout.verticalAlign(workspace, options.emPixels); break;
+                    pxt.blocks.layout.verticalAlign(workspace, options.emPixels || 18); break;
                 case BlockLayout.Flow:
                     pxt.blocks.layout.flow(workspace, { ratio: options.aspectRatio, useViewWidth: options.useViewWidth }); break;
                 case BlockLayout.Clean:
@@ -68,37 +60,41 @@ namespace pxt.blocks {
                     break;
             }
 
-
             let metrics = workspace.getMetrics();
 
-            let svg = $(blocklyDiv).find('svg').clone(true, true);
-            svg.removeClass("blocklySvg").addClass('blocklyPreview');
-            svg.find('.blocklyBlockCanvas,.blocklyBubbleCanvas')
-                .attr('transform', `translate(${-metrics.contentLeft}, ${-metrics.contentTop}) scale(1)`)
-            svg.find('.blocklyMainBackground').remove();
-            svg[0].setAttribute('viewBox', `0 0 ${metrics.contentWidth} ${metrics.contentHeight}`)
-            svg.removeAttr('width');
-            svg.removeAttr('height');
+            const svg = blocklyDiv.querySelectorAll('svg')[0].cloneNode(true) as SVGSVGElement;
+            pxt.blocks.layout.cleanUpBlocklySvg(svg);
+
+            pxt.U.toArray(svg.querySelectorAll('.blocklyBlockCanvas,.blocklyBubbleCanvas'))
+                .forEach(el => el.setAttribute('transform', `translate(${-metrics.contentLeft}, ${-metrics.contentTop}) scale(1)`));
+
+            svg.setAttribute('viewBox', `0 0 ${metrics.contentWidth} ${metrics.contentHeight}`)
 
             if (options.emPixels) {
-                svg[0].style.width = (metrics.contentWidth / options.emPixels) + 'em';
-                svg[0].style.height = (metrics.contentHeight / options.emPixels) + 'em';
+                svg.style.width = (metrics.contentWidth / options.emPixels) + 'em';
+                svg.style.height = (metrics.contentHeight / options.emPixels) + 'em';
             }
 
-            return svg[0] as any;
-
+            return options.splitSvg
+                ? pxt.blocks.layout.splitSvg(svg, workspace, options.emPixels)
+                : svg;
         } catch (e) {
             pxt.reportException(e);
+
+            // We re-use the workspace across renders, catch any errors so we know to 
+            // create a new workspace if there was an error
+            if (workspace) workspace.dispose();
+            workspace = undefined;
             return undefined;
         }
     }
 
-    export function blocksMetrics(ws: Blockly.Workspace): { width: number; height: number; } {
+    export function blocksMetrics(ws: Blockly.WorkspaceSvg): { width: number; height: number; } {
         const blocks = ws.getTopBlocks(false);
         if (!blocks.length) return { width: 0, height: 0 };
 
         let m: { l: number, r: number, t: number, b: number } = undefined;
-        blocks.forEach(b => {
+        blocks.forEach((b: Blockly.BlockSvg) => {
             const r = b.getBoundingRectangle();
             if (!m) m = { l: r.topLeft.x, r: r.bottomRight.x, t: r.topLeft.y, b: r.bottomRight.y }
             else {

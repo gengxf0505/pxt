@@ -1,16 +1,24 @@
 declare namespace pxt {
+
+    type CodeCardType = "file" | "example" | "codeExample" | "tutorial" | "side" | "template" | "package" | "hw";
+
     interface Map<T> {
         [index: string]: T;
     }
 
     interface TargetVersions {
         target: string;
-        pxt: string;
+        pxt?: string;
         pxtCrowdinBranch?: string;
         targetCrowdinBranch?: string;
         tag?: string;
         branch?: string;
         commits?: string; // URL
+    }
+
+    interface Size {
+        width: number;
+        height: number;
     }
 
     /**
@@ -32,20 +40,33 @@ declare namespace pxt {
         files: string[];
         simFiles?: string[];
         testFiles?: string[];
+        preferredEditor?: string; // tsprj, blocksprj, pyprj
+        testDependencies?: pxt.Map<string>;
+        cppDependencies?: pxt.Map<string>;
         public?: boolean;
         binaryonly?: boolean;
         platformio?: PlatformIOConfig;
+        compileServiceVariant?: string;
+        palette?: string[];
+        screenSize?: Size;
         yotta?: YottaConfig;
         npmDependencies?: Map<string>;
         card?: CodeCard;
         additionalFilePath?: string;
+        additionalFilePaths?: string[];
         core?: boolean;
+        // used for sorting for core packages
+        weight?: number;
         gistId?: string;
         extension?: PackageExtension; // describe the associated extension if any
         dalDTS?: {
-            includeDirs: string[];
+            corePackage?: string;
+            includeDirs?: string[];
             excludePrefix?: string[];
         };
+        features?: string[];
+        hidden?: boolean; // hide package from package selection dialog
+        skipLocalization?: boolean;
     }
 
     interface PackageExtension {
@@ -86,8 +107,10 @@ declare namespace pxt {
         role?: string;
         ariaLabel?: string;
         label?: string;
+        labelIcon?: string;
         labelClass?: string;
-        tabIndex?: number
+        tags?: string[]; // tags shown in home screen, colors specified in theme
+        tabIndex?: number;
 
         color?: string; // one of semantic ui colors
         description?: string;
@@ -99,8 +122,11 @@ declare namespace pxt {
         youTubeId?: string;
         time?: number;
         url?: string;
+        learnMoreUrl?: string;
+        buyUrl?: string;
+        feedbackUrl?: string;
         responsive?: boolean;
-        cardType?: "file" | "example" | "codeExample" | "tutorial" | "side" | "template";
+        cardType?: CodeCardType;
 
         header?: string;
         any?: number;
@@ -109,14 +135,19 @@ declare namespace pxt {
         blocks?: number;
         javascript?: number;
 
+        tutorialStep?: number;
+        tutorialLength?: number;
+
         icon?: string;
         iconContent?: string; // Text instead of icon name
         iconColor?: string;
 
         onClick?: (e: any) => void; // React event
+        onLabelClicked?: (e: any) => void;
 
         target?: string;
         className?: string;
+        variant?: string;
     }
 
     interface JRes {

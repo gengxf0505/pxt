@@ -1,32 +1,56 @@
-interface TypeOptions {
-    union?: Type;
-    classType?: py.ClassDef;
-    primType?: string;
-    arrayType?: Type;
-}
-
-interface Type extends TypeOptions {
-    tid: number;
-}
-
-interface FieldDesc {
-    name: string;
-    type: Type;
-    inClass: py.ClassDef;
-    fundef?: py.FunctionDef;
-    isGetSet?: boolean;
-    isStatic?: boolean;
-    isProtected?: boolean;
-    initializer?: py.Expr;
-}
-
+type Type = py.Type
 type Map<T> = pxt.Map<T>;
 
+import * as nodeutil from './nodeutil';
+import * as fs from 'fs';
+import U = pxt.Util;
+import B = pxt.blocks;
+
 namespace py {
+    export interface TypeOptions {
+        union?: Type;
+        classType?: py.ClassDef;
+        primType?: string;
+        arrayType?: Type;
+    }
+
+    export interface Type extends TypeOptions {
+        tid: number;
+    }
+
+    export interface FieldDesc {
+        name: string;
+        type: Type;
+        inClass: py.ClassDef;
+        fundef?: py.FunctionDef;
+        isGetSet?: boolean;
+        isStatic?: boolean;
+        isProtected?: boolean;
+        initializer?: py.Expr;
+    }
+
+    export interface VarDescOptions {
+        expandsTo?: string;
+        isImportStar?: boolean;
+        isPlainImport?: boolean;
+        isLocal?: boolean;
+        isParam?: boolean;
+        fundef?: py.FunctionDef;
+        classdef?: py.ClassDef;
+        isImport?: py.Module;
+    }
+
+    export interface VarDesc extends VarDescOptions {
+        type: Type;
+        name: string;
+    }
+
     // based on grammar at https://docs.python.org/3/library/ast.html
     export interface AST {
         lineno: number;
         col_offset: number;
+        startPos?: number;
+        endPos?: number;
         kind: string;
     }
     export interface Stmt extends AST {
@@ -359,6 +383,7 @@ namespace py {
     export interface Num extends Expr {
         kind: "Num";
         n: number;
+        ns: string;
     }
     export interface Str extends Expr {
         kind: "Str";
@@ -428,11 +453,7 @@ namespace py {
 }
 
 
-import * as nodeutil from './nodeutil';
-import * as fs from 'fs';
-import U = pxt.Util;
-import B = pxt.blocks;
-
+/* tslint:disable:no-trailing-whitespace */
 const convPy = `
 import ast
 import sys
@@ -459,6 +480,7 @@ for fn in @files@:
     js[fn] = to_json(ast.parse(open(fn, "r").read()))
 print(json.dumps(js))
 `
+/* tslint:enable:no-trailing-whitespace */
 
 const nameMap: Map<string> = {
     "Expr": "ExprStmt",
@@ -523,22 +545,6 @@ function lookupSymbol(name: string): py.Symbol {
     return null
 }
 
-interface VarDescOptions {
-    expandsTo?: string;
-    isImportStar?: boolean;
-    isPlainImport?: boolean;
-    isLocal?: boolean;
-    isParam?: boolean;
-    fundef?: py.FunctionDef;
-    classdef?: py.ClassDef;
-    isImport?: py.Module;
-}
-
-interface VarDesc extends VarDescOptions {
-    type: Type;
-    name: string;
-}
-
 interface Ctx {
     currModule: py.Module;
     currClass: py.ClassDef;
@@ -550,7 +556,7 @@ let currIteration = 0
 
 let typeId = 0
 let numUnifies = 0
-function mkType(o: TypeOptions = {}) {
+function mkType(o: py.TypeOptions = {}) {
     let r: Type = U.flatClone(o) as any
     r.tid = ++typeId
     return r
@@ -560,7 +566,7 @@ function currentScope(): py.ScopeDef {
     return ctx.currFun || ctx.currClass || ctx.currModule
 }
 
-function defvar(n: string, opts: VarDescOptions) {
+function defvar(n: string, opts: py.VarDescOptions) {
     let scopeDef = currentScope()
     let v = scopeDef.vars[n]
     if (!v) {
@@ -769,10 +775,14 @@ function resetCtx(m: py.Module) {
 }
 
 function scope(f: () => B.JsNode) {
-    let prevCtx = U.flatClone(ctx)
-    let r = f()
-    ctx = prevCtx
-    return r
+    const prevCtx = U.flatClone(ctx)
+    let r: B.JsNode;
+    try {
+        r = f()
+    } finally {
+        ctx = prevCtx
+    }
+    return r;
 }
 
 function todoExpr(name: string, e: B.JsNode) {
@@ -902,13 +912,21 @@ function setupScope(n: py.ScopeDef) {
 function typeAnnot(t: Type) {
     let s = t2s(t)
     if (s[0] == "?")
-        return B.mkText("")
+        return B.mkText(": any; /** TODO: type **/")
     return B.mkText(": " + t2s(t))
 }
 
+function guardedScope(v: py.AST, f: () => B.JsNode) {
+    try {
+        return scope(f);
+    }
+    catch (e) {
+        return B.mkStmt(todoComment(`conversion failed for ${(v as any).name || v.kind}`, []));
+    }
+}
 
 const stmtMap: Map<(v: py.Stmt) => B.JsNode> = {
-    FunctionDef: (n: py.FunctionDef) => scope(() => {
+    FunctionDef: (n: py.FunctionDef) => guardedScope(n, () => {
         let isMethod = !!ctx.currClass && !ctx.currFun
         if (!isMethod)
             defvar(n.name, { fundef: n })
@@ -1014,7 +1032,7 @@ const stmtMap: Map<(v: py.Stmt) => B.JsNode> = {
         return B.mkStmt(B.mkGroup(nodes))
     }),
 
-    ClassDef: (n: py.ClassDef) => scope(() => {
+    ClassDef: (n: py.ClassDef) => guardedScope(n, () => {
         setupScope(n)
         defvar(n.name, { classdef: n })
         U.assert(!ctx.currClass)
@@ -1078,6 +1096,8 @@ const stmtMap: Map<(v: py.Stmt) => B.JsNode> = {
         if (!ctx.currClass && !ctx.currFun && nm[0] != "_")
             pref = "export "
         if (nm && ctx.currClass && !ctx.currFun) {
+            // class fields can't be const
+            isConstCall = false;
             let src = expr(n.value)
             let fd = getClassField(ctx.currClass, nm)
             let attrTp = typeOf(n.value)
@@ -1118,7 +1138,10 @@ const stmtMap: Map<(v: py.Stmt) => B.JsNode> = {
         if (isConstCall || isUpperCase) {
             // first run would have "let" in it
             defvar(getName(n.targets[0]), {})
-            return B.mkStmt(B.mkText(pref + "const "), B.mkInfix(expr(n.targets[0]), "=", expr(n.value)))
+            let s = pref;
+            if (!/^static /.test(pref))
+                s += "const ";
+            return B.mkStmt(B.mkText(s), B.mkInfix(expr(n.targets[0]), "=", expr(n.value)))
         }
         if (!pref && n.targets[0].kind == "Tuple") {
             let res = [
@@ -1419,7 +1442,7 @@ let funMap: Map<FunOverride> = {
     "pins.I2CDevice.read_into": { n: ".readInto", t: tpVoid },
     "bool": { n: "!!", t: tpBoolean },
     "Array.index": { n: ".indexOf", t: tpNumber },
-    "time.sleep": { n: "loops.pause", t: tpVoid, scale: 1000 }
+    "time.sleep": { n: "pause", t: tpVoid, scale: 1000 }
 }
 
 function isSuper(v: py.Expr) {
@@ -1456,7 +1479,9 @@ const exprMap: Map<(v: py.Expr) => B.JsNode> = {
                     else {
                         let ee = elts.shift()
                         let et = ee ? expr(ee) : B.mkText("???")
+                        /* tslint:disable:no-invalid-template-strings */
                         res.push(B.mkText("${"), et, B.mkText("}"))
+                        /* tslint:enable:no-invalid-template-strings */
                     }
                     return ""
                 })
@@ -1776,7 +1801,7 @@ const exprMap: Map<(v: py.Expr) => B.JsNode> = {
             let s = n.slice as py.Slice
             return B.mkInfix(expr(n.value), ".",
                 B.H.mkCall("slice", [s.lower ? expr(s.lower) : B.mkText("0"),
-                    s.upper ? expr(s.upper) : null].filter(x => !!x)))
+                s.upper ? expr(s.upper) : null].filter(x => !!x)))
         }
         else {
             return exprTODO(n)
@@ -1846,7 +1871,7 @@ function stmt(e: py.Stmt): B.JsNode {
         currErrs = ""
     }
     if (cmts.length) {
-        r = B.mkGroup(cmts.map(c => B.H.mkComment(c)).concat(r))
+        r = B.mkGroup(cmts.map(c => B.mkStmt(B.H.mkComment(c))).concat(r))
     }
     return r
 }
@@ -1862,7 +1887,7 @@ function isEmpty(b: B.JsNode): boolean {
 
 // TODO look at scopes of let
 
-function toTS(mod: py.Module) {
+function toTS(mod: py.Module): B.JsNode[] {
     U.assert(mod.kind == "Module")
     resetCtx(mod)
     if (!mod.vars) mod.vars = {}
@@ -1894,21 +1919,91 @@ function iterPy(e: py.AST, f: (v: py.AST) => void) {
     })
 }
 
-export function convertAsync(fns: string[]) {
+function parseWithPythonAsync(files: string[]) {
+    return nodeutil.spawnWithPipeAsync({
+        cmd: process.env["PYTHON3"] || (/^win/i.test(process.platform) ? "py" : "python3"),
+        args: [],
+        input: convPy.replace("@files@", JSON.stringify(files)),
+        silent: true
+    })
+        .then(buf => {
+            pxt.debug(`analyzing python AST (${buf.length} bytes)`)
+            let js = JSON.parse(buf.toString("utf8"))
+            // nodeutil.writeFileSync("pyast.json", JSON.stringify(js, null, 2), { encoding: "utf8" })
+            const rec = (v: any): any => {
+                if (Array.isArray(v)) {
+                    for (let i = 0; i < v.length; ++i)
+                        v[i] = rec(v[i])
+                    return v
+                }
+                if (!v || !v.kind)
+                    return v
+                v.kind = U.lookup(nameMap, v.kind) || v.kind
+                if (U.lookup(simpleNames, v.kind))
+                    return v.kind
+                for (let k of Object.keys(v)) {
+                    v[k] = rec(v[k])
+                }
+                return v
+            }
+            js.kind = "FileSet"
+            js = rec(js)
+            delete js.kind
+            //nodeutil.writeFileSync("pyast2.json", JSON.stringify(js, null, 2), { encoding: "utf8" })
+            return js
+        })
+
+}
+
+export function convertAsync(fns: string[], useInternal = false) {
     let mainFiles: string[] = []
     while (/\.py$/.test(fns[0])) {
         mainFiles.push(fns.shift().replace(/\\/g, "/"))
     }
 
+    if (useInternal) {
+        return parseWithPythonAsync(mainFiles)
+            .then(parsedPy => {
+                for (let f of mainFiles) {
+                    pxt.log(`parse: ${f}`)
+                    let source = fs.readFileSync(f, "utf8")
+                    let tokens = pxt.py.lex(source)
+                    //console.log(pxt.py.tokensToString(tokens))
+                    let res = pxt.py.parse(source, f, tokens)
+                    let custompy = pxt.py.dump(res.stmts, true)
+                    let realpy = pxt.py.dump(parsedPy[f].body, true)
+                    let path = "tmp/"
+                    if (custompy != realpy) {
+                        fs.writeFileSync(path + "pxtpy.txt", custompy)
+                        fs.writeFileSync(path + "realpy.txt", realpy)
+                        fs.writeFileSync(path + "realpy.json", JSON.stringify(parsedPy[f]))
+                        return nodeutil.spawnWithPipeAsync({
+                            cmd: "diff",
+                            args: ["-u", path + "pxtpy.txt", path + "realpy.txt"],
+                            input: "",
+                            silent: true,
+                            allowNonZeroExit: true
+                        })
+                            .then(buf => {
+                                fs.writeFileSync(path + "diff.patch", buf)
+                                console.log(`Differences at ${f}; files written in ${path}`)
+                            })
+                    }
+                }
+                return Promise.resolve()
+            })
+    }
+
     let primFiles =
         U.toDictionary(mainFiles.length ? mainFiles : nodeutil.allFiles(fns[0]),
             s => s.replace(/\\/g, "/"))
-    let files = U.concat(fns.map(f => nodeutil.allFiles(f))).map(f => f.replace(/\\/g, "/"))
-    let dirs: Map<number> = {}
+    let files = U.concat(fns.map(f => nodeutil.allFiles(f))).map(f => f.replace(/\\/g, "/"));
+    let dirs: Map<number> = {};
     for (let f of files) {
-        for (let suff of ["/docs/conf.py", "/conf.py", "/setup.py", "/README.md", "/README.rst"]) {
+        for (let suff of ["/docs/conf.py", "/conf.py", "/setup.py", "/README.md", "/README.rst", "/__init__.py"]) {
             if (U.endsWith(f, suff)) {
-                dirs[f.slice(0, f.length - suff.length)] = 1
+                const dirName = f.slice(0, f.length - suff.length);
+                dirs[dirName] = 1;
             }
         }
     }
@@ -1934,37 +2029,10 @@ export function convertAsync(fns: string[]) {
     }
 
     const pkgFilesKeys = Object.keys(pkgFiles);
-    pxt.debug(`files (${pkgFilesKeys.length}):\n   ${pkgFilesKeys.join('\n   ')}`);
+    pxt.log(`files (${pkgFilesKeys.length}):\n   ${pkgFilesKeys.join('\n   ')}`);
 
-    return nodeutil.spawnWithPipeAsync({
-        cmd: /^win/i.test(process.platform) ? "py" : "python3",
-        args: [],
-        input: convPy.replace("@files@", JSON.stringify(pkgFilesKeys)),
-        silent: true
-    })
-        .then(buf => {
-            pxt.debug(`analyzing python AST (${buf.length} bytes)`)
-            let js = JSON.parse(buf.toString("utf8"))
-            const rec = (v: any): any => {
-                if (Array.isArray(v)) {
-                    for (let i = 0; i < v.length; ++i)
-                        v[i] = rec(v[i])
-                    return v
-                }
-                if (!v || !v.kind)
-                    return v
-                v.kind = U.lookup(nameMap, v.kind) || v.kind
-                if (U.lookup(simpleNames, v.kind))
-                    return v.kind
-                for (let k of Object.keys(v)) {
-                    v[k] = rec(v[k])
-                }
-                return v
-            }
-            js.kind = "FileSet"
-            js = rec(js)
-            delete js.kind
-
+    return parseWithPythonAsync(pkgFilesKeys)
+        .then(js => {
             moduleAst = {}
             U.iterMap(js, (fn: string, js: py.Module) => {
                 let mname = pkgFiles[fn]
@@ -1976,7 +2044,12 @@ export function convertAsync(fns: string[]) {
             for (let i = 0; i < 5; ++i) {
                 currIteration = i
                 U.iterMap(js, (fn: string, js: any) => {
-                    toTS(js)
+                    pxt.log(`converting ${fn}`);
+                    try {
+                        toTS(js)
+                    } catch (e) {
+                        console.log(e);
+                    }
                 })
             }
 

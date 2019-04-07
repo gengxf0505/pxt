@@ -1,9 +1,5 @@
 import * as pkg from "./package";
-import * as core from "./core";
-import * as data from "./data";
-import * as app from "./app";
 import * as React from "react";
-
 
 export type ViewState = any;
 export type ProjectView = pxt.editor.IProjectView;
@@ -81,6 +77,7 @@ export class Editor implements pxt.editor.IEditor {
 
     zoomIn() { }
     zoomOut() { }
+    setScale(scale: number) { }
 
     closeFlyout() { }
 
@@ -104,21 +101,33 @@ export class Editor implements pxt.editor.IEditor {
     setDiagnostics(file: pkg.File, snapshot: any): void { }
     setViewState(view: ViewState): void { }
 
-    saveToTypeScript(): Promise<string> {
-        return Promise.resolve('');
+    /**
+     * Serializes code to typescript.
+     * @returns undefined if there is nothing to save
+     */
+    saveToTypeScriptAsync(): Promise<string> {
+        return Promise.resolve(undefined);
     }
 
-    highlightStatement(brk: pxtc.LocationInfo) { }
+    highlightStatement(stmt: pxtc.LocationInfo, brk?: pxsim.DebuggerBreakpointMessage): boolean { return false; }
 
     clearHighlightedStatements() { }
-
-    filterToolbox(filters?: pxt.editor.ProjectFilters, showCategories = pxt.blocks.CategoryMode.All): Element {
-        return null
-    }
 
     setHighContrast(hc: boolean) {}
 
     hasEditorToolbar() {
         return true
+    }
+
+    filterToolbox(filters?: pxt.editor.ProjectFilters, showCategories?: boolean) {
+    }
+
+    insertBreakpoint() {
+    }
+
+    updateBreakpoints() {
+    }
+
+    updateToolbox() {
     }
 }

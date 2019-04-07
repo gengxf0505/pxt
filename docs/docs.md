@@ -41,15 +41,14 @@ for creating JavaScript/Blocks online editors.
 * [Source Embedding](/source-embedding)
 * [SAMD21 Targets](/targets/samd21targets)
 
-### [Creating Packages](/packages)
-* [pxt.json](/packages/pxtJson)
+### [Creating Extensions](/extensions)
+* [pxt.json](/extensions/pxt-json)
 
 ### [Command Line Interface](/cli)
 * [build](/cli/build)
 * [bump](/cli/bump)
 * [cherrypick](/cli/cherrypick)
 * [deploy](/cli/deploy)
-* [electron](/cli/electron)
 * [login](/cli/login)
 * [staticpkg](/cli/staticpkg)
 * [update](/cli/update)

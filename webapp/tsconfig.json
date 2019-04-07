@@ -3,6 +3,7 @@
         "target": "es5",
         "noImplicitAny": true,
         "noImplicitReturns": true,
+        "noImplicitThis": true,
         "module": "commonjs",
         "outDir": "../built/webapp",
         "rootDir": ".",
@@ -16,7 +17,7 @@
         "declaration": false,
         "preserveConstEnums": true,
         "lib": ["dom", "dom.iterable", "scripthost", "es6"],
-        "types": ["jquery", "react", "react-dom", "bluebird"]
+        "types": ["react", "react-dom", "bluebird"]
     },
     "exclude": [ "node_modules" ]
 }

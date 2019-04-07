@@ -15,7 +15,7 @@ namespace pxt.docs.codeCard {
             else if (card.software && !card.hardware) color = 'teal';
         }
         const url = card.url ? /^[^:]+:\/\//.test(card.url) ? card.url : ('/' + card.url.replace(/^\.?\/?/, ''))
-            : undefined;
+            : card.youTubeId ? `https://www.youtube.com/watch?v=${card.youTubeId}` : undefined;
         const link = !!url;
         const div = (parent: HTMLElement, cls: string, tag = "div", text: string | number = ''): HTMLElement => {
             let d = document.createElement(tag);
@@ -64,7 +64,7 @@ namespace pxt.docs.codeCard {
         }
 
         if (card.blocksXml) {
-            let svg = pxt.blocks.render(card.blocksXml);
+            const svg = pxt.blocks.render(card.blocksXml);
             if (!svg) {
                 console.error("failed to render blocks");
                 pxt.debug(card.blocksXml);
@@ -80,23 +80,17 @@ namespace pxt.docs.codeCard {
             img.appendChild(pre);
         }
 
-        if (card.imageUrl) {
+        const imgUrl = card.imageUrl || (card.youTubeId && `https://img.youtube.com/vi/${card.youTubeId}/0.jpg`)
+        if (imgUrl) {
             let imageWrapper = document.createElement("div") as HTMLDivElement;
             imageWrapper.className = "ui imagewrapper";
-            let image = document.createElement("img") as HTMLImageElement;
+            let image = document.createElement("div") as HTMLDivElement;
             image.className = "ui cardimage";
-            image.src = card.imageUrl;
-            image.alt = name;
+            image.style.backgroundImage = `url("${card.imageUrl}")`;
+            image.title = name;
             image.setAttribute("role", "presentation");
             imageWrapper.appendChild(image);
             img.appendChild(imageWrapper);
-        }
-
-        if (card.youTubeId) {
-            let screenshot = document.createElement("img") as HTMLImageElement;
-            screenshot.className = "ui image";
-            screenshot.src = `https://img.youtube.com/vi/${card.youTubeId}/maxresdefault.jpg`;
-            img.appendChild(screenshot)
         }
 
         if (card.cardType == "file") {

@@ -15,6 +15,27 @@
  */
 
 namespace ts.pxtc.thumb {
+    const thumbRegs: pxt.Map<number> = {
+        "r0": 0,
+        "r1": 1,
+        "r2": 2,
+        "r3": 3,
+        "r4": 4,
+        "r5": 5,
+        "r6": 6,
+        "r7": 7,
+        "r8": 8,
+        "r9": 9,
+        "r10": 10,
+        "r11": 10,
+        "r12": 12,
+        "sp": 13,
+        "r13": 13,
+        "lr": 14,
+        "r14": 14,
+        "pc": 15,
+        "r15": 15,
+    }
 
     export class ThumbProcessor extends pxtc.assembler.AbstractProcessor {
 
@@ -98,6 +119,7 @@ namespace ts.pxtc.thumb {
             this.addInst("ldr   $r5, [pc, $i1]", 0x4800, 0xf800);
             this.addInst("ldr   $r5, $la", 0x4800, 0xf800);
             this.addInst("ldr   $r5, [sp, $i1]", 0x9800, 0xf800).canBeShared = true;
+            this.addInst("ldr   $r5, [sp]", 0x9800, 0xf800).canBeShared = true;
             this.addInst("ldrb  $r0, [$r1, $i4]", 0x7800, 0xf800);
             this.addInst("ldrb  $r0, [$r1, $r4]", 0x5c00, 0xfe00);
             this.addInst("ldrh  $r0, [$r1, $i7]", 0x8800, 0xf800);
@@ -125,10 +147,14 @@ namespace ts.pxtc.thumb {
             this.addInst("rors  $r0, $r1", 0x41c0, 0xffc0);
             this.addInst("sbcs  $r0, $r1", 0x4180, 0xffc0);
             this.addInst("sev", 0xbf40, 0xffff);
-            this.addInst("stmia $r5!, $rl0", 0xc000, 0xf800);
+            this.addInst("stm   $r5!, $rl0", 0xc000, 0xf800);
+            this.addInst("stmia $r5!, $rl0", 0xc000, 0xf800); // alias for stm
+            this.addInst("stmea $r5!, $rl0", 0xc000, 0xf800); // alias for stm
             this.addInst("str   $r0, [$r1, $i5]", 0x6000, 0xf800).canBeShared = true;
+            this.addInst("str   $r0, [$r1]", 0x6000, 0xf800).canBeShared = true;
             this.addInst("str   $r0, [$r1, $r4]", 0x5000, 0xfe00);
             this.addInst("str   $r5, [sp, $i1]", 0x9000, 0xf800).canBeShared = true;
+            this.addInst("str   $r5, [sp]", 0x9000, 0xf800).canBeShared = true;
             this.addInst("strb  $r0, [$r1, $i4]", 0x7000, 0xf800);
             this.addInst("strb  $r0, [$r1, $r4]", 0x5400, 0xfe00);
             this.addInst("strh  $r0, [$r1, $i7]", 0x8000, 0xf800);
@@ -181,7 +207,9 @@ namespace ts.pxtc.thumb {
             this.addInst("ldlit   $r5, $i32", 0x4800, 0xf800);
         }
 
-        public toFnPtr(v: number, baseOff: number) {
+        public toFnPtr(v: number, baseOff: number, lbl: string) {
+            if (target.runtimeIsARM && /::/.test(lbl))
+                return (v + baseOff) & ~1;
             return (v + baseOff) | 1;
         }
 
@@ -194,14 +222,19 @@ namespace ts.pxtc.thumb {
         }
 
         public postProcessAbsAddress(f: assembler.File, v: number) {
-            v = v & 0xfffffffe
+            // Thumb addresses have last bit set, but we are ourselves always
+            // in Thumb state, so to go to ARM state, we signal that with that last bit
+            v ^= 1
             v -= f.baseOffset
             return v
         }
 
         public emit32(v0: number, v: number, actual: string): pxtc.assembler.EmitResult {
-            if (v % 2) return pxtc.assembler.emitErr("uneven BL?", actual);
-            let off = v / 2
+            let isBLX = v % 2 ? true : false
+            if (isBLX) {
+                v = (v + 1) & ~3
+            }
+            let off = v >> 1
             assert(off != null)
             // Range is +-4M (i.e., 2M instructions)
             if ((off | 0) != off ||
@@ -214,162 +247,10 @@ namespace ts.pxtc.thumb {
 
             return {
                 opcode: (off & 0xf0000000) ? (0xf400 | imm10) : (0xf000 | imm10),
-                opcode2: (0xf800 | imm11),
+                opcode2: isBLX ? (0xe800 | imm11) : (0xf800 | imm11),
                 stack: 0,
                 numArgs: [v],
                 labelName: actual
-            }
-        }
-
-        public commonalize(file: assembler.File): void {
-            if (!target.commonalize)
-                return
-            // this is a heuristic - we could allow more instructions
-            // to be shared, but it seems to result in less sharing
-            let canBeShared = (l: assembler.Line) => {
-                if (l.type == "empty") return true
-                if (l.type == "instruction") {
-                    let inst = l.instruction
-                    if (inst && inst.canBeShared)
-                        return true
-                    switch (l.words[0]) {
-                        case "pop":
-                        case "push":
-                            if (l.numArgs[0] & ~0xf)
-                                return false // we only allow r0-r3
-                            return true
-                        case "bl":
-                            switch (l.words[1]) {
-                                case "_numops_fromInt":
-                                case "_pxt_incr":
-                                case "_pxt_decr":
-                                case "pxt::incr":
-                                case "pxt::decr":
-                                case "pxt::fromInt":
-                                    return true
-                                default:
-                                    return false
-                            }
-                        default:
-                            return false
-                    }
-                }
-                return false
-            }
-
-            let frag: assembler.Line[] = []
-            let frags: pxt.Map<assembler.Line[][]> = {}
-            let lastLine = -1
-            for (let i = 0; i < file.lines.length; ++i) {
-                let l = file.lines[i]
-                //console.log(i, l.text)
-                if (l.type == "empty")
-                    continue
-                if (canBeShared(l)) {
-                    frag.push(l)
-                } else {
-                    if (l.words[0] == "_js_end")
-                        lastLine = i
-                    if (frag.length > 2) {
-                        let key = ""
-                        for (let ll of frag) {
-                            if (ll.type == "empty") continue
-                            assert(!!ll.instruction);
-                            assert(!!ll.opcode);
-                            if (key) key += ","
-                            if (ll.words[0] == "bl") {
-                                key += "BL " + ll.words[1]
-                            } else {
-                                key += ll.opcode
-                            }
-                        }
-                        if (frags[key])
-                            frags[key].push(frag)
-                        else
-                            frags[key] = [frag]
-                    }
-                    frag = []
-                }
-            }
-
-            if (lastLine < 0)
-                return // testing?
-
-            for (let k of Object.keys(frags)) {
-                let f = frags[k]
-                if (f.length == 1) {
-                    if (f[0].length > 3) {
-                        //console.log(k)
-                        let kleft = k.split(",")
-                        let kright = kleft.slice()
-                        let left = f[0].slice()
-                        let right = f[0].slice()
-                        let res: assembler.Line[] = null
-                        let reskey = ""
-                        while (left.length >= 3) {
-                            kleft.pop()
-                            left.pop()
-                            right.shift()
-                            kright.shift()
-
-                            reskey = kleft.join(",")
-                            let other = frags[reskey]
-                            if (other && other.length) {
-                                res = left
-                                break
-                            }
-                            reskey = kright.join(",")
-                            other = frags[reskey]
-                            if (other && other.length) {
-                                res = right
-                                break
-                            }
-                        }
-                        if (res) {
-                            frags[k] = []
-                            frags[reskey].push(res)
-                        }
-                    }
-                }
-            }
-
-            let addLines: assembler.Line[] = []
-            let seq = 0
-            for (let k of Object.keys(frags)) {
-                let f = frags[k]
-                if (f.length <= 1)
-                    continue
-                if (addLines.length == 0) {
-                    file.buildLine("; shared assembly fragments", addLines)
-                    file.buildLine("@nostackcheck", addLines)
-                    file.buildLine("_frag_start:", addLines)
-                }
-                let hasBL = k.indexOf("BL") >= 0
-                let lbl = "_frag_" + ++seq
-                file.buildLine(`; num.uses: ${f.length}`, addLines)
-                file.buildLine(lbl + ":", addLines)
-                if (hasBL)
-                    file.buildLine("mov r7, lr", addLines)
-                let stack = 0
-                for (let l of f[0]) {
-                    let tx = l.text.replace(/;.*/, "")
-                    if (/@\d/.test(tx))
-                        tx = ".short " + l.opcode + " ; " + tx
-                    file.buildLine(tx, addLines)
-                    stack += l.stack
-                }
-                file.buildLine(hasBL ? "bx r7" : "bx lr", addLines)
-                for (let frag of f) {
-                    frag[0].update("bl " + lbl)
-                    frag[1].update("@dummystack " + stack)
-                    for (let ii = 2; ii < frag.length; ++ii)
-                        frag[ii].update("")
-                }
-            }
-
-
-            if (addLines.length > 0) {
-                file.lines = file.lines.slice(0, lastLine).concat(addLines).concat(file.lines.slice(lastLine))
             }
         }
 
@@ -502,6 +383,14 @@ namespace ts.pxtc.thumb {
                 // RULE: beq .next; b .somewhere; .next: -> bne .somewhere
                 ln.update("bne " + lnNext.words[1])
                 lnNext.update("")
+            } else if (lnop == "push" && ln.numArgs[0] == 0x4000 && lnNext.getOp() == "push" && !(lnNext.numArgs[0] & 0x4000)) {
+                // RULE: push {lr}; push {X, ...} -> push {lr, X, ...}
+                ln.update(lnNext.text.replace("{", "{lr, "))
+                lnNext.update("")
+            } else if (lnop == "pop" && lnNext.getOp() == "pop" && lnNext.numArgs[0] == 0x8000) {
+                // RULE: pop {X, ...}; pop {pc} -> push {X, ..., pc}
+                ln.update(ln.text.replace("}", ", pc}"))
+                lnNext.update("")
             } else if (lnop == "push" && lnNext.getOp() == "pop" && ln.numArgs[0] == lnNext.numArgs[0]) {
                 // RULE: push {X}; pop {X} -> nothing
                 assert(ln.numArgs[0] > 0)
@@ -525,6 +414,19 @@ namespace ts.pxtc.thumb {
                 // RULE: pop {rX}; push {rX} -> ldr rX, [sp, #0]
                 ln.update("ldr r" + singleReg(ln) + ", [sp, #0]")
                 lnNext.update("")
+            } else if (lnop == "push" && lnNext.getOpExt() == "ldr $r5, [sp, $i1]" &&
+                singleReg(ln) == lnNext.numArgs[0] && lnNext.numArgs[1] == 0) {
+                // RULE: push {rX}; ldr rX, [sp, #0] -> push {rX}
+                lnNext.update("")
+            } else if (lnop == "bl" && lnNext.getOp() == "push" &&
+                /^_pxt_(incr|decr)$/.test(ln.words[1]) && singleReg(lnNext) == 0) {
+                ln.update("bl " + ln.words[1] + "_pushR0")
+                lnNext.update("@dummystack 1")
+            } else if (lnop == "ldr" && ln.getOpExt() == "ldr $r5, [sp, $i1]" && lnNext.getOp() == "bl" &&
+                /^_pxt_(incr|decr)(_pushR0)?$/.test(lnNext.words[1]) && ln.numArgs[0] == 0 && ln.numArgs[1] <= 32
+                && lnNext2 && lnNext2.getOp() != "push") {
+                ln.update("bl " + lnNext.words[1] + "_" + ln.numArgs[1])
+                lnNext.update("")
             } else if (lnNext2 && lnop == "push" && singleReg(ln) >= 0 && preservesReg(lnNext, singleReg(ln)) &&
                 lnNext2.getOp() == "pop" && singleReg(ln) == singleReg(lnNext2)) {
                 // RULE: push {rX}; movs rY, #V; pop {rX} -> movs rY, #V (when X != Y)
@@ -536,18 +438,10 @@ namespace ts.pxtc.thumb {
         public registerNo(actual: string) {
             if (!actual) return null;
             actual = actual.toLowerCase()
-            switch (actual) {
-                case "pc": actual = "r15"; break;
-                case "lr": actual = "r14"; break;
-                case "sp": actual = "r13"; break;
-            }
-            let m = /^r(\d+)$/.exec(actual)
-            if (m) {
-                let r = parseInt(m[1], 10)
-                if (0 <= r && r < 16)
-                    return r;
-            }
-            return null;
+            const r = thumbRegs[actual]
+            if (r === undefined)
+                return null
+            return r
         }
 
         public testAssembler() {

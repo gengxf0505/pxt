@@ -53,22 +53,32 @@ function searchSubmit(form) {
     if (pxt && pxt.tickEvent) pxt.tickEvent("docs.search", { 'source': form.id }, { interactiveConsent: true })
 }
 
-function setupSidebar() {
-    $('#togglesidebar').on('keydown', handleEnterKey);
+function scrollActiveHeaderIntoView() {
+    var activeHeaders = document.getElementsByClassName("header active");
+    for (var i = 0; i < activeHeaders.length; ++i) {
+        var activeHeader = activeHeaders.item(i);
+        if (activeHeader.scrollIntoView)
+            activeHeader.scrollIntoView()
+    }
+}
 
+function setupSidebar() {
+    // do not use pxt.appTarget in this function
+    $('#togglesidebar').on('keydown', handleEnterKey);
     $('.ui.sidebar')
         .sidebar({
             dimPage: false,
             onShow: function () {
                 togglesidebar.setAttribute("aria-expanded", "true");
                 document.getElementsByClassName("sidebar").item(0).getElementsByClassName("focused").item(0).focus();
+                scrollActiveHeaderIntoView();
             },
             onHidden: function () {
                 togglesidebar.setAttribute("aria-expanded", "false");
             }
         })
         .sidebar(
-        'attach events', '#togglesidebar'
+            'attach events', '#togglesidebar'
         );
 
     $('.ui.dropdown')
@@ -112,9 +122,12 @@ function setupSidebar() {
     for (var i = 0; i < searchIcons.length; i++) {
         searchIcons.item(i).onkeydown = handleEnterKey;
     }
+
+    scrollActiveHeaderIntoView();
 }
 
 function setupSemantic() {
+    // do not use pxt.appTarget in this function
     // don't show related videos
     $.fn.embed.settings.sources.youtube.url = '//www.youtube.com/embed/{id}?rel=0'
 
@@ -186,56 +199,68 @@ function setupSemantic() {
 
 function setupBlocklyAsync() {
     let promise = Promise.resolve();
-    if (pxt.appTarget.appTheme && pxt.appTarget.appTheme.extendEditor) {
+    if (pxt.appTarget.appTheme && pxt.appTarget.appTheme.extendFieldEditors) {
         let opts = {};
         promise = promise.then(function () {
-                return pxt.BrowserUtils.loadScriptAsync(pxt.webConfig.commitCdnUrl + "editor.js")
-            }).then(function () {
-                return pxt.editor.initExtensionsAsync(opts)
-            }).then(function (res) {
-                if (res.fieldEditors)
-                    res.fieldEditors.forEach(function (fi) {
-                        pxt.blocks.registerFieldEditor(fi.selector, fi.editor, fi.validator);
-                    })
-            })
+            return pxt.BrowserUtils.loadScriptAsync("fieldeditors.js")
+        }).then(function () {
+            return pxt.editor.initFieldExtensionsAsync(opts)
+        }).then(function (res) {
+            if (res.fieldEditors)
+                res.fieldEditors.forEach(function (fi) {
+                    pxt.blocks.registerFieldEditor(fi.selector, fi.editor, fi.validator);
+                })
+        })
+    }
+
+    // backward compatibility: load editor
+    if (pxt.appTarget.versions &&
+        pxt.semver.strcmp(pxt.appTarget.versions.pxt, "3.9.0") < 0 &&
+        pxt.appTarget.appTheme && pxt.appTarget.appTheme.extendEditor) {
+        let opts = {};
+        promise = promise.then(function () {
+            return pxt.BrowserUtils.loadScriptAsync(pxt.webConfig.commitCdnUrl + "editor.js")
+        }).then(function () {
+            return pxt.editor.initExtensionsAsync(opts)
+        }).then(function (res) {
+            if (res.fieldEditors)
+                res.fieldEditors.forEach(function (fi) {
+                    pxt.blocks.registerFieldEditor(fi.selector, fi.editor, fi.validator);
+                })
+        })
     }
     return promise;
 }
 
 function renderSnippets() {
-    var codeElems = $('code')
-    for (var i = 0; i < codeElems.length; i++) {
-        codeElems[i].className = codeElems[i].className.replace('-ignore', '')
-    }
-
-    var downloadScreenshots = /screenshots=1/i.test(window.location.href);
     var path = window.location.href.split('/').pop().split(/[?#]/)[0];
     ksRunnerReady(function () {
-        setupSidebar();
-        setupSemantic();
         setupBlocklyAsync()
-        .then(function () {
-            return pxt.runner.renderAsync({
-                snippetClass: 'lang-blocks',
-                signatureClass: 'lang-sig',
-                blocksClass: 'lang-block',
-                shuffleClass: 'lang-shuffle',
-                simulatorClass: 'lang-sim',
-                linksClass: 'lang-cards',
-                namespacesClass: 'lang-namespaces',
-                codeCardClass: 'lang-codecard',
-                packageClass: 'lang-package',
-                projectClass: 'lang-project',
-                snippetReplaceParent: true,
-                simulator: true,
-                hex: true,
-                hexName: path,
-                downloadScreenshots: downloadScreenshots
-            });
-        }).done();
+            .then(function () {
+                return pxt.runner.renderAsync({
+                    snippetClass: 'lang-blocks',
+                    signatureClass: 'lang-sig',
+                    blocksClass: 'lang-block',
+                    staticPythonClass: 'lang-spy', 
+                    shuffleClass: 'lang-shuffle',
+                    simulatorClass: 'lang-sim',
+                    linksClass: 'lang-cards',
+                    namespacesClass: 'lang-namespaces',
+                    codeCardClass: 'lang-codecard',
+                    packageClass: 'lang-package',
+                    projectClass: 'lang-project',
+                    snippetReplaceParent: true,
+                    simulator: true,
+                    showEdit: true,
+                    hex: true,
+                    hexName: path
+                });
+            }).done();
     });
 }
 
 $(document).ready(function () {
+    setupSidebar();
+    setupSemantic();
     renderSnippets();
 });

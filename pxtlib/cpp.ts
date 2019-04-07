@@ -3,15 +3,20 @@
 namespace pxt {
     declare var require: any;
 
+    let lzmaPromise: Promise<any>;
     function getLzmaAsync() {
-        if (U.isNodeJS) return Promise.resolve(require("lzma"));
-        else {
-            let lz = (<any>window).LZMA;
-            if (lz) return Promise.resolve(lz);
-            const monacoPaths: Map<string> = (window as any).MonacoPaths
-            return BrowserUtils.loadScriptAsync(monacoPaths['lzma/lzma_worker-min.js'])
-                .then(() => (<any>window).LZMA);
+        let lzmaPromise: Promise<any>;
+        if (!lzmaPromise) {
+            if (U.isNodeJS)
+                lzmaPromise = Promise.resolve(require("lzma"));
+            else
+                lzmaPromise = Promise.resolve((<any>window).LZMA);
+            lzmaPromise.then(res => {
+                if (!res) pxt.reportError('lzma', 'failed to load');
+                return res;
+            })
         }
+        return lzmaPromise;
     }
 
     export function lzmaDecompressAsync(buf: Uint8Array): Promise<string> { // string
@@ -19,10 +24,12 @@ namespace pxt {
             .then(lzma => new Promise<string>((resolve, reject) => {
                 try {
                     lzma.decompress(buf, (res: string, error: any) => {
+                        if (error) pxt.debug(`lzma decompression failed`);
                         resolve(error ? undefined : res);
                     })
                 }
                 catch (e) {
+                    if (e) pxt.debug(`lzma decompression failed`);
                     resolve(undefined);
                 }
             }));
@@ -33,10 +40,12 @@ namespace pxt {
             .then(lzma => new Promise<Uint8Array>((resolve, reject) => {
                 try {
                     lzma.compress(text, 7, (res: any, error: any) => {
+                        if (error) pxt.reportException(error);
                         resolve(error ? undefined : new Uint8Array(res));
                     })
                 }
                 catch (e) {
+                    pxt.reportException(e)
                     resolve(undefined);
                 }
             }));
@@ -137,7 +146,9 @@ namespace pxt.cpp {
         let constsName = "dal.d.ts"
         let sourcePath = "/source/"
 
-        for (let pkg of mainPkg.sortedDeps()) {
+        let mainDeps = mainPkg.sortedDeps(true)
+
+        for (let pkg of mainDeps) {
             pkg.addSnapshot(pkgSnapshot, [constsName, ".h", ".cpp"])
         }
 
@@ -155,19 +166,20 @@ namespace pxt.cpp {
                 gittag: "none",
                 serviceId: "nocompile"
             }
+        compileService = U.clone(compileService)
 
         let compile = appTarget.compile
         if (!compile)
             compile = {
                 isNative: false,
                 hasHex: false,
+                switches: {}
             }
 
-        const isCSharp = compile.nativeType == pxtc.NATIVE_TYPE_CS
         const isPlatformio = !!compileService.platformioIni;
-        const isCodal = compileService.buildEngine == "codal"
+        const isCodal = compileService.buildEngine == "codal" || compileService.buildEngine == "dockercodal"
         const isDockerMake = compileService.buildEngine == "dockermake"
-        const isYotta = !isCSharp && !isPlatformio && !isCodal && !isDockerMake
+        const isYotta = !isPlatformio && !isCodal && !isDockerMake
         if (isPlatformio)
             sourcePath = "/src/"
         else if (isCodal || isDockerMake)
@@ -175,8 +187,8 @@ namespace pxt.cpp {
 
         let pxtConfig = "// Configuration defines\n"
         let pointersInc = "\nPXT_SHIMS_BEGIN\n"
+        let abiInc = ""
         let includesInc = `#include "pxt.h"\n`
-        let fullCS = ""
         let thisErrors = ""
         let dTsNamespace = ""
         let err = (s: string) => thisErrors += `   ${fileName}(${lineNo}): ${s}\n`;
@@ -203,7 +215,7 @@ namespace pxt.cpp {
 
         let makefile = ""
 
-        for (const pkg of mainPkg.sortedDeps()) {
+        for (const pkg of mainDeps) {
             if (pkg.getFiles().indexOf(constsName) >= 0) {
                 const src = pkg.host().readFile(pkg, constsName)
                 Util.assert(!!src, `${constsName} not found in ${pkg.id}`)
@@ -218,6 +230,31 @@ namespace pxt.cpp {
                 makefile = pkg.host().readFile(pkg, "Makefile")
             }
         }
+
+        let hash_if_options = ["0", "false", "PXT_UTF8"]
+
+        let cpp_options: pxt.Map<number> = {}
+        if (compile.switches.boxDebug)
+            cpp_options["PXT_BOX_DEBUG"] = 1
+
+        if (compile.gc)
+            cpp_options["PXT_GC"] = 1
+
+        if (compile.utf8)
+            cpp_options["PXT_UTF8"] = 1
+
+        if (compile.switches.profile)
+            cpp_options["PXT_PROFILE"] = 1
+
+        if (compile.switches.gcDebug)
+            cpp_options["PXT_GC_DEBUG"] = 1
+
+        if (compile.switches.numFloat)
+            cpp_options["PXT_USE_FLOAT"] = 1
+
+        if (compile.vtableShift)
+            cpp_options["PXT_VTABLE_SHIFT"] = compile.vtableShift
+
 
         function stripComments(ln: string) {
             return ln.replace(/\/\/.*/, "").replace(/\/\*/, "")
@@ -383,7 +420,10 @@ namespace pxt.cpp {
             let indexedInstanceIdx = -1
 
             // replace #if 0 .... #endif with newlines
-            src = src.replace(/^\s*#\s*if\s+0\s*$[^]*?^\s*#\s*endif\s*$/mg, f => f.replace(/[^\n]/g, ""))
+            src = src.replace(/^(\s*#\s*if\s+(\w+)\s*$)([^]*?)(^\s*#\s*(elif|else|endif)\s*$)/mg,
+                (f, _if, arg, middle, _endif) =>
+                    hash_if_options.indexOf(arg) >= 0 && !cpp_options[arg] ?
+                        _if + middle.replace(/[^\n]/g, "") + _endif : f)
 
             // special handling of C++ namespace that ends with Methods (e.g. FooMethods)
             // such a namespace will be converted into a TypeScript interface
@@ -434,6 +474,7 @@ namespace pxt.cpp {
                         return "boolean";
                     case "StringData*": return "string";
                     case "String": return "string";
+                    case "ImageLiteral_": return "string";
                     case "ImageLiteral": return "string";
                     case "Action": return "() => void";
 
@@ -459,6 +500,7 @@ namespace pxt.cpp {
                     case "int8_t":
                     case "sbyte":
                     case "int":
+                    case "ramint_t":
                         return "I";
 
                     case "void": return "V";
@@ -468,10 +510,16 @@ namespace pxt.cpp {
                     case "bool": return "B";
                     case "double": return "D"
 
+                    case "ImageLiteral_":
+                        return "T"
+
+                    case "String":
+                        return "S"
+
                     default:
                         if (U.lookup(knownEnums, tp))
                             return "I"
-                        return "_";
+                        return "_" + tp.replace(/[\*_]+$/, "");
                 }
             }
 
@@ -526,6 +574,21 @@ namespace pxt.cpp {
                     return
                 }
 
+                m = /^PXT_ABI\((\w+)\)/.exec(ln)
+                if (m) {
+                    pointersInc += `PXT_FNPTR(::${m[1]}),\n`
+                    abiInc += `extern "C" void ${m[1]}();\n`
+                    res.functions.push({
+                        name: m[1],
+                        argsFmt: [],
+                        value: 0
+                    })
+                }
+
+                m = /^#define\s+PXT_COMM_BASE\s+([0-9a-fx]+)/.exec(ln)
+                if (m)
+                    res.commBase = parseInt(m[1])
+
                 // function definition
                 m = /^\s*(\w+)([\*\&]*\s+[\*\&]*)(\w+)\s*\(([^\(\)]*)\)\s*(;\s*$|\{|$)/.exec(ln)
                 if (currAttrs && m) {
@@ -537,10 +600,10 @@ namespace pxt.cpp {
                     let funName = m[3]
                     let origArgs = m[4]
                     currAttrs = currAttrs.trim().replace(/ \w+\.defl=\w+/g, "")
-                    let argsFmt = mapRunTimeType(retTp)
+                    let argsFmt = [mapRunTimeType(retTp)]
                     let args = origArgs.split(/,/).filter(s => !!s).map(s => {
                         let r = parseArg(parsedAttrs, s)
-                        argsFmt += mapRunTimeType(r.type)
+                        argsFmt.push(mapRunTimeType(r.type))
                         return `${r.name}: ${mapType(r.type)}`
                     })
                     let numArgs = args.length
@@ -588,6 +651,19 @@ namespace pxt.cpp {
                     return;
                 }
 
+                m = /^\s*extern const (\w+) (\w+);/.exec(ln)
+                if (currAttrs && m) {
+                    let fi: pxtc.FuncInfo = {
+                        name: currNs + "::" + m[2],
+                        argsFmt: [],
+                        value: null
+                    }
+                    res.functions.push(fi)
+                    pointersInc += "PXT_FNPTR(&::" + fi.name + "),\n"
+                    currAttrs = ""
+                    return;
+                }
+
                 m = /^\s*(\w+)\s+(\w+)\s*;/.exec(ln)
                 if (currAttrs && m) {
                     let parsedAttrs = pxtc.parseCommentString(currAttrs)
@@ -610,164 +686,6 @@ namespace pxt.cpp {
                         currAttrs = ""
                         return;
                     }
-                }
-
-                if (currAttrs && ln.trim()) {
-                    err("declaration not understood: " + ln)
-                    currAttrs = ""
-                    currDocComment = ""
-                    return;
-                }
-            })
-
-            return outp
-        }
-
-        function parseCs(src: string) {
-            currNs = ""
-            currDocComment = ""
-            currAttrs = ""
-            inDocComment = false
-
-            // replace #if false .... #endif with newlines
-            src = src.replace(/^\s*#\s*if\s+false\s*$[^]*?^\s*#\s*endif\s*$/mg, f => f.replace(/[^\n]/g, ""))
-
-            lineNo = 0
-
-            // the C# types we can map to TypeScript
-            function mapType(tp: string) {
-                switch (tp.replace(/\s+/g, "")) {
-                    case "void": return "void";
-                    case "int": return "int32";
-                    case "uint": return "uint32";
-                    case "float":
-                    case "double": return "number";
-                    case "ushort": return "uint16";
-                    case "short": return "int16";
-                    case "byte": return "uint8";
-                    case "sbyte": return "int8";
-                    case "bool": return "boolean";
-                    case "string":
-                    case "String": return "string";
-                    case "Function": return "() => void";
-                    case "object": return "any";
-                    default:
-                        return toJs(tp);
-                }
-            }
-
-            function isNumberType(tp: string) {
-                tp = tp.replace(/\s+/g, "")
-
-                if (U.lookup(knownEnums, tp))
-                    return true
-                let mt = mapType(tp)
-                if (mt == "number" || /^u?int\d+$/.test(mt))
-                    return true
-
-                return false
-            }
-
-            function mapRunTimeType(tp: string) {
-                tp = tp.replace(/\s+/g, "")
-                if (isNumberType(tp))
-                    tp = "#" + tp
-                return tp + ";"
-            }
-
-            outp = "" // we don't really care about this one for C#
-            inEnum = false
-            enumVal = 0
-
-            enumsDTS.setNs("")
-            shimsDTS.setNs("")
-
-            src.split(/\r?\n/).forEach(ln => {
-                ++lineNo
-
-                // remove comments (NC = no comments)
-                let lnNC = stripComments(ln)
-
-                processEnumLine(ln)
-
-                let enM = /^\s*(public) enum\s+(\w+)\s*({|$)/.exec(lnNC)
-                if (enM) {
-                    enterEnum(enM[2], enM[3])
-                }
-
-                if (handleComments(ln))
-                    return
-
-                let m = /^\s*public (static\s+|partial\s+)*class\s+(\w+)/.exec(ln)
-                if (m) {
-                    currNs = m[2]
-                    if (currAttrs || currDocComment) {
-                        finishNamespace()
-                        shimsDTS.setNs(toJs(currNs))
-                        enumsDTS.setNs(toJs(currNs))
-                    }
-                    return
-                }
-
-                // function definition
-                m = /^\s*public static (async\s+)*([\w\[\]<>]+)\s+(\w+)\(([^\(\)]*)\)\s*(;\s*$|\{|$)/.exec(ln)
-                if (currAttrs && m) {
-                    let parsedAttrs = pxtc.parseCommentString(currAttrs)
-                    // top-level functions (outside of a namespace) are not permitted
-                    if (!currNs) err("missing namespace declaration");
-                    let retTp = m[2]
-                    let funName = m[3]
-                    let origArgs = m[4]
-                    let isAsync = false
-                    currAttrs = currAttrs.trim().replace(/ \w+\.defl=\w+/g, "")
-                    if (retTp == "Task") {
-                        retTp = "void"
-                        isAsync = true
-                    } else {
-                        let mm = /^Task<(.*)>$/.exec(retTp)
-                        if (mm) {
-                            isAsync = true
-                            retTp = mm[1]
-                        }
-                    }
-                    let argsFmt = mapRunTimeType(retTp)
-
-                    if (isAsync) {
-                        argsFmt = "async;" + argsFmt
-                        currAttrs += " async"
-                    }
-
-                    let args: string[] = []
-
-                    for (let s of origArgs.split(/,/)) {
-                        if (!s) continue
-                        let r = parseArg(parsedAttrs, s)
-                        let mapped = mapRunTimeType(r.type)
-                        argsFmt += mapped
-                        if (mapped != "CTX;")
-                            args.push(`${r.name}: ${mapType(r.type)}`)
-                    }
-
-                    let fi: pxtc.FuncInfo = {
-                        name: currNs + "::" + funName,
-                        argsFmt,
-                        value: null
-                    }
-
-                    //console.log(`${ln.trim()} : ${argsFmt}`)
-                    if (currDocComment) {
-                        shimsDTS.setNs(toJs(currNs))
-                        shimsDTS.write("")
-                        shimsDTS.write(currDocComment)
-                        currAttrs += ` shim=${fi.name}`
-                        shimsDTS.write(currAttrs)
-                        funName = toJs(funName)
-                        shimsDTS.write(`function ${funName}(${args.join(", ")}): ${mapType(retTp)};`)
-                    }
-                    currDocComment = ""
-                    currAttrs = ""
-                    res.functions.push(fi)
-                    return;
                 }
 
                 if (currAttrs && ln.trim()) {
@@ -813,7 +731,7 @@ namespace pxt.cpp {
                     } else if (currSettings[settingName] === settingValue) {
                         // OK
                     } else if (!pkg.parent.config.yotta || !pkg.parent.config.yotta.ignoreConflicts) {
-                        let err = new PkgConflictError(lf("conflict on yotta setting {0} between packages {1} and {2}",
+                        let err = new PkgConflictError(lf("conflict on yotta setting {0} between extensions {1} and {2}",
                             settingName, pkg.id, prev.id))
                         err.pkg0 = prev
                         err.pkg1 = pkg
@@ -847,8 +765,7 @@ namespace pxt.cpp {
         if (mainPkg) {
             let seenMain = false
 
-            // TODO computeReachableNodes(pkg, true)
-            for (let pkg of mainPkg.sortedDeps()) {
+            for (let pkg of mainDeps) {
                 thisErrors = ""
                 parseJson(pkg)
                 if (pkg == mainPkg) {
@@ -859,42 +776,37 @@ namespace pxt.cpp {
                 } else {
                     U.assert(!seenMain)
                 }
-                let ext = isCSharp ? ".cs" : ".cpp"
+                let ext = ".cpp"
                 for (let fn of pkg.getFiles()) {
-                    let isHeader = !isCSharp && U.endsWith(fn, ".h")
+                    let isHeader = U.endsWith(fn, ".h")
                     if (isHeader || U.endsWith(fn, ext)) {
                         let fullName = pkg.config.name + "/" + fn
-                        if ((pkg.config.name == "base" || pkg.config.name == "core") && isHeader)
+                        if ((pkg.config.name == "base" || /^core($|---)/.test(pkg.config.name)) && isHeader)
                             fullName = fn
                         if (isHeader)
                             includesInc += `#include "${isYotta ? sourcePath.slice(1) : ""}${fullName}"\n`
                         let src = pkg.readFile(fn)
                         if (src == null)
-                            U.userError(lf("C++ file {0} is missing in package {1}.", fn, pkg.config.name))
+                            U.userError(lf("C++ file {0} is missing in extension {1}.", fn, pkg.config.name))
                         fileName = fullName
-                        if (isCSharp) {
-                            pxt.debug("Parse C#: " + fullName)
-                            parseCs(src)
-                            fullCS += `\n\n\n#line 1 "${fullName}"\n` + src
-                        } else {
-                            // parseCpp() will remove doc comments, to prevent excessive recompilation
-                            pxt.debug("Parse C++: " + fullName)
-                            src = parseCpp(src, isHeader)
-                            res.extensionFiles[sourcePath + fullName] = src
-                        }
+
+                        // parseCpp() will remove doc comments, to prevent excessive recompilation
+                        pxt.debug("Parse C++: " + fullName)
+                        src = parseCpp(src, isHeader)
+                        res.extensionFiles[sourcePath + fullName] = src
 
                         if (pkg.level == 0)
                             res.onlyPublic = false
                         if (pkg.verProtocol() && pkg.verProtocol() != "pub" && pkg.verProtocol() != "embed")
                             res.onlyPublic = false
                     }
-                    if (!isCSharp && (U.endsWith(fn, ".c") || U.endsWith(fn, ".S") || U.endsWith(fn, ".s"))) {
+                    if (U.endsWith(fn, ".c") || U.endsWith(fn, ".S") || U.endsWith(fn, ".s")) {
                         let src = pkg.readFile(fn)
                         res.extensionFiles[sourcePath + pkg.config.name + "/" + fn.replace(/\.S$/, ".s")] = src
                     }
                 }
                 if (thisErrors) {
-                    allErrors += lf("Package {0}:\n", pkg.id) + thisErrors
+                    allErrors += lf("Extension {0}:\n", pkg.id) + thisErrors
                 }
             }
         }
@@ -902,15 +814,10 @@ namespace pxt.cpp {
         if (allErrors)
             U.userError(allErrors)
 
-        fullCS += "\n#line default\n"
-
         // merge optional settings
         U.jsonCopyFrom(optSettings, currSettings);
         const configJson = U.jsonUnFlatten(optSettings)
-        if (isCSharp) {
-            res.extensionFiles["/lib.cs"] = fullCS
-            res.generatedFiles["/module.json"] = "{}"
-        } else if (isDockerMake) {
+        if (isDockerMake) {
             let packageJson = {
                 name: "pxt-app",
                 private: true,
@@ -937,6 +844,7 @@ namespace pxt.cpp {
                 cfg[k] = v
             })
             res.generatedFiles["/codal.json"] = JSON.stringify(codalJson, null, 4) + "\n"
+            pxt.debug(`codal.json: ${res.generatedFiles["/codal.json"]}`);
         } else if (isPlatformio) {
             const iniLines = compileService.platformioIni.slice()
             // TODO merge configjson
@@ -961,25 +869,24 @@ namespace pxt.cpp {
                 "bin": "./source"
             }
             res.generatedFiles["/module.json"] = JSON.stringify(moduleJson, null, 4) + "\n"
+            pxt.debug(`module.json: ${res.generatedFiles["/module.json"]}`)
         }
 
-        if (compile.boxDebug) {
-            pxtConfig += "#define PXT_BOX_DEBUG 1\n"
-            pxtConfig += "#define PXT_MEMLEAK_DEBUG 1\n"
+        for (let k of Object.keys(cpp_options)) {
+            pxtConfig += `#define ${k} ${cpp_options[k]}\n`
         }
 
-        if (compile.nativeType == pxtc.NATIVE_TYPE_AVRVM) {
-            pxtConfig += "#define PXT_VM 1\n"
-        } else {
-            pxtConfig += "#define PXT_VM 0\n"
-        }
+        if (compile.uf2Family)
+            pxtConfig += `#define PXT_UF2_FAMILY ${compile.uf2Family}\n`
 
-        if (!isCSharp) {
-            res.generatedFiles[sourcePath + "pointers.cpp"] = includesInc + protos.finish() + pointersInc + "\nPXT_SHIMS_END\n"
-            res.generatedFiles[sourcePath + "pxtconfig.h"] = pxtConfig
-            if (isYotta)
-                res.generatedFiles["/config.json"] = JSON.stringify(configJson, null, 4) + "\n"
-            res.generatedFiles[sourcePath + "main.cpp"] = `
+        res.generatedFiles[sourcePath + "pointers.cpp"] = includesInc + protos.finish() + abiInc + pointersInc + "\nPXT_SHIMS_END\n"
+        res.generatedFiles[sourcePath + "pxtconfig.h"] = pxtConfig
+        pxt.debug(`pxtconfig.h: ${res.generatedFiles[sourcePath + "pxtconfig.h"]}`)
+        if (isYotta) {
+            res.generatedFiles["/config.json"] = JSON.stringify(configJson, null, 4) + "\n"
+            pxt.debug(`yotta config.json: ${res.generatedFiles["/config.json"]}`)
+        }
+        res.generatedFiles[sourcePath + "main.cpp"] = `
 #include "pxt.h"
 #ifdef PXT_MAIN
 PXT_MAIN
@@ -987,12 +894,11 @@ PXT_MAIN
 int main() {
     uBit.init();
     pxt::start();
-    while (1) uBit.sleep(10000);
-    return 0;
+    release_fiber();
+    return 0;   // your program will never reach this line.
 }
 #endif
 `
-        }
         if (makefile) {
             let allfiles = Object.keys(res.extensionFiles).concat(Object.keys(res.generatedFiles))
             let inc = ""
@@ -1032,19 +938,6 @@ int main() {
         prevExtInfo = res
 
         return res;
-    }
-
-    function fileReadAsArrayBufferAsync(f: File): Promise<ArrayBuffer> { // ArrayBuffer
-        if (!f)
-            return Promise.resolve<ArrayBuffer>(null);
-        else {
-            return new Promise<ArrayBuffer>((resolve, reject) => {
-                let reader = new FileReader();
-                reader.onerror = (ev) => resolve(null);
-                reader.onload = (ev) => resolve(reader.result);
-                reader.readAsArrayBuffer(f);
-            });
-        }
     }
 
     function fromUTF8Bytes(binstr: ArrayLike<number>): string {
@@ -1146,20 +1039,22 @@ int main() {
         }
     }
 
+    export interface HexFileMeta {
+        cloudId: string;
+        targetVersions?: pxt.TargetVersions;
+        editor: string;
+        name: string;
+    }
+
     export interface HexFile {
-        meta?: {
-            cloudId: string;
-            targetVersions?: pxt.TargetVersions;
-            editor: string;
-            name: string;
-        };
+        meta?: HexFileMeta;
         source: string;
     }
 
     export function unpackSourceFromHexFileAsync(file: File): Promise<HexFile> { // string[] (guid)
         if (!file) return undefined;
 
-        return fileReadAsArrayBufferAsync(file).then(data => {
+        return pxt.Util.fileReadAsBufferAsync(file).then(data => {
             let a = new Uint8Array(data);
             return unpackSourceFromHexAsync(a);
         });
@@ -1224,38 +1119,30 @@ int main() {
 }
 
 namespace pxt.hex {
-    let downloadCache: Map<Promise<any>> = {};
+    const downloadCache: Map<Promise<pxtc.HexInfo>> = {};
     let cdnUrlPromise: Promise<string>;
 
     export let showLoading: (msg: string) => void = (msg) => { };
-    export let hideLoading: () => void = () => {};
+    export let hideLoading: () => void = () => { };
 
-    function downloadHexInfoAsync(extInfo: pxtc.ExtensionInfo) {
-        let cachePromise = Promise.resolve();
-
-        if (!downloadCache.hasOwnProperty(extInfo.sha)) {
-            cachePromise = downloadHexInfoCoreAsync(extInfo)
-                .then((hexFile) => {
-                    downloadCache[extInfo.sha] = hexFile;
-                });
-        }
-
-        return cachePromise
-            .then(() => {
-                return downloadCache[extInfo.sha];
-            });
+    function downloadHexInfoAsync(extInfo: pxtc.ExtensionInfo): Promise<pxtc.HexInfo> {
+        if (!downloadCache.hasOwnProperty(extInfo.sha))
+            downloadCache[extInfo.sha] = downloadHexInfoCoreAsync(extInfo);
+        return downloadCache[extInfo.sha];
     }
 
     function getCdnUrlAsync() {
-        if (cdnUrlPromise) return cdnUrlPromise
+        if (cdnUrlPromise) return cdnUrlPromise;
         else {
             let curr = getOnlineCdnUrl()
             if (curr) return (cdnUrlPromise = Promise.resolve(curr))
-            return (cdnUrlPromise = Cloud.privateGetAsync("clientconfig").then(r => r.primaryCdnUrl));
+            const forceLive = pxt.webConfig && pxt.webConfig.isStatic;
+            return (cdnUrlPromise = Cloud.privateGetAsync("clientconfig", forceLive)
+                .then(r => r.primaryCdnUrl));
         }
     }
 
-    function downloadHexInfoCoreAsync(extInfo: pxtc.ExtensionInfo) {
+    function downloadHexInfoCoreAsync(extInfo: pxtc.ExtensionInfo): Promise<pxtc.HexInfo> {
         let hexurl = ""
 
         showLoading(pxt.U.lf("Compiling (this may take a minute)..."));
@@ -1276,29 +1163,32 @@ namespace pxt.hex {
                             .then(ret => new Promise<string>((resolve, reject) => {
                                 let tryGet = () => {
                                     let url = ret.hex.replace(/\.hex/, ".json")
-                                    pxt.log("polling at " + url)
+                                    pxt.log(`polling C++ build ${url}`)
                                     return Util.httpGetJsonAsync(url)
                                         .then(json => {
-                                            if (!json.success)
-                                                U.userError(JSON.stringify(json, null, 1))
+                                            pxt.log(`build log ${url.replace(/\.json$/, ".log")}`);
+                                            if (!json.success) {
+                                                pxt.log(`build failed`);
+                                                if (json.mbedresponse && json.mbedresponse.result && json.mbedresponse.result.exception)
+                                                    pxt.log(json.mbedresponse.result.exception);
+                                                resolve(null);
+                                            }
                                             else {
                                                 pxt.log("fetching " + hexurl + ".hex")
                                                 resolve(U.httpGetTextAsync(hexurl + ".hex"))
                                             }
                                         },
-                                        e => {
-                                            setTimeout(tryGet, 1000)
-                                            return null
-                                        })
+                                            e => {
+                                                setTimeout(tryGet, 1000)
+                                                return null
+                                            })
                                 }
                                 tryGet();
                             })))
                     .then(text => {
                         hideLoading();
                         return {
-                            enums: [],
-                            functions: [],
-                            hex: text.split(/\r?\n/)
+                            hex: text && text.split(/\r?\n/)
                         };
                     })
             }).finally(() => {
@@ -1306,33 +1196,48 @@ namespace pxt.hex {
             })
     }
 
-    function downloadHexInfoLocalAsync(extInfo: pxtc.ExtensionInfo): Promise<any> {
-        if (!Cloud.localToken || !window || !Cloud.isLocalHost()) {
-            return Promise.resolve();
+    function downloadHexInfoLocalAsync(extInfo: pxtc.ExtensionInfo): Promise<pxtc.HexInfo> {
+        if (pxt.webConfig && pxt.webConfig.isStatic) {
+            return Util.requestAsync({
+                url: `${pxt.webConfig.cdnUrl}hexcache/${extInfo.sha}.hex`
+            })
+                .then((resp) => {
+                    if (resp.text) {
+                        const result: any = {
+                            enums: [],
+                            functions: [],
+                            hex: resp.text.split(/\r?\n/)
+                        }
+                        return Promise.resolve(result);
+                    }
+                    pxt.log("Hex info not found in bundled hex cache");
+                    return Promise.resolve();
+                })
+                .catch((e) => {
+                    pxt.log("Error fetching hex info from bundled hex cache");
+                    return Promise.resolve();
+                });
+        }
+
+        if (!Cloud.localToken || !window || !pxt.BrowserUtils.isLocalHost()) {
+            return Promise.resolve(undefined);
         }
 
         return apiAsync("compile/" + extInfo.sha)
             .then((json) => {
                 if (!json || json.notInOfflineCache || !json.hex) {
-                    return Promise.resolve();
+                    return Promise.resolve(undefined);
                 }
-
                 json.hex = json.hex.split(/\r?\n/);
                 return json;
             })
             .catch((e) => {
-                return Promise.resolve();
+                return Promise.resolve(undefined);
             });
     }
 
     function apiAsync(path: string, data?: any) {
-        return U.requestAsync({
-            url: "/api/" + path,
-            headers: { "Authorization": Cloud.localToken },
-            method: data ? "POST" : "GET",
-            data: data || undefined,
-            allowHttpErrors: true
-        }).then(r => r.json);
+        return Cloud.localRequestAsync(path, data).then(r => r.json)
     }
 
     export function storeWithLimitAsync(host: Host, idxkey: string, newkey: string, newval: string, maxLen = 10) {
@@ -1435,7 +1340,9 @@ namespace pxt.hex {
                 buf = ""
                 let cnt = parseInt(nxt, 16)
                 while (cnt-- > 0) {
+                    /* tslint:disable:no-octal-literal */
                     buf += "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                    /* tslint:enable:no-octal-literal */
                 }
             } else {
                 buf = ts.pxtc.decodeBase64(nxt)

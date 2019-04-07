@@ -20,6 +20,7 @@
 /* Blockly */
 @blocklyToolboxZIndex: 40;
 @blocklyWidgetDivZIndex: (@gridPickerTooltipZIndex)-2; /* Just below grid picker tooltip */
+@blocklyWidgetDivFunctionEditorZIndex: @dimmerZIndex+1; /* Above the dimmer, since the function editor is inside a dialog */
 @blocklyDropdownDivZIndex: @blocklyWidgetDivZIndex+1;
 @blocklyFlyoutZIndex: 20;
 /* From Blockly css.js */
@@ -63,4 +64,7 @@
 @helpCardZIndex: 5;
 
 /* Sandbox mode */
-@sandboxFooterZIndex: @aboveEditorZIndex+1;
+@sandboxFooterZIndex: @aboveEditorZIndex+2;
+
+/* Debugger */
+@debuggerToolsZIndex: @aboveEditorZIndex+1;

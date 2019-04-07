@@ -19,7 +19,7 @@ pxt.setAppTarget({
         isNative: false,
         hasHex: false,
         jsRefCounting: true,
-        floatingPoint: false
+        switches: {}
     },
     bundledpkgs: {},
     appTheme: {},
@@ -34,9 +34,10 @@ pxt.setAppTarget({
 // Webworker needs this config to run
 pxt.webConfig = {
     relprefix: undefined,
+    verprefix: undefined,
     workerjs: WEB_PREFIX + "/blb/worker.js",
-    tdworkerjs: undefined,
     monacoworkerjs: undefined,
+    gifworkerjs: undefined,
     pxtVersion: undefined,
     pxtRelId: undefined,
     pxtCdnUrl: undefined,
@@ -59,39 +60,39 @@ class BlocklyCompilerTestHost implements pxt.Host {
 
     static createTestHostAsync() {
         if (!BlocklyCompilerTestHost.cachedFiles["pxt-core.d.ts"]) {
-            return pxt.Util.httpGetTextAsync(WEB_PREFIX + "/common/pxt-core.d.ts")
-            .then(res => {
-                BlocklyCompilerTestHost.cachedFiles["pxt-core.d.ts"] = res;
-                return pxt.Util.httpGetTextAsync(WEB_PREFIX + "/common/pxt-helpers.ts")
-            })
-            .then(res => {
-                BlocklyCompilerTestHost.cachedFiles["pxt-helpers.ts"] = res;
-                return pxt.Util.httpGetTextAsync(WEB_PREFIX + '/test-library/pxt.json')
-            })
-            .then(res => {
-                BlocklyCompilerTestHost.cachedFiles[`test-library/pxt.json`] = res;
-                let json: pxt.PackageConfig;
+            return ts.pxtc.Util.httpGetTextAsync(WEB_PREFIX + "/common/pxt-core.d.ts")
+                .then(res => {
+                    BlocklyCompilerTestHost.cachedFiles["pxt-core.d.ts"] = res;
+                    return ts.pxtc.Util.httpGetTextAsync(WEB_PREFIX + "/common/pxt-helpers.ts")
+                })
+                .then(res => {
+                    BlocklyCompilerTestHost.cachedFiles["pxt-helpers.ts"] = res;
+                    return pxt.Util.httpGetTextAsync(WEB_PREFIX + '/test-library/pxt.json')
+                })
+                .then(res => {
+                    BlocklyCompilerTestHost.cachedFiles[`test-library/pxt.json`] = res;
+                    let json: pxt.PackageConfig;
 
-                try {
-                    json = JSON.parse(res);
-                }
-                catch (e) { }
+                    try {
+                        json = JSON.parse(res);
+                    }
+                    catch (e) { }
 
-                if (json && json.files && json.files.length) {
-                    return Promise.all(json.files.map(f => {
-                        return pxt.Util.httpGetTextAsync(WEB_PREFIX + '/test-library/' + f)
-                            .then(txt => {
-                                BlocklyCompilerTestHost.cachedFiles[`test-library/${f}`] = txt;
-                            });
-                    }))
-                    .then(() => {});
-                }
+                    if (json && json.files && json.files.length) {
+                        return Promise.all(json.files.map(f => {
+                            return pxt.Util.httpGetTextAsync(WEB_PREFIX + '/test-library/' + f)
+                                .then(txt => {
+                                    BlocklyCompilerTestHost.cachedFiles[`test-library/${f}`] = txt;
+                                });
+                        }))
+                            .then(() => { });
+                    }
 
-                return Promise.resolve()
-            })
-            .then(() => {
-                return new BlocklyCompilerTestHost();
-            })
+                    return Promise.resolve()
+                })
+                .then(() => {
+                    return new BlocklyCompilerTestHost();
+                })
         }
 
         return Promise.resolve(new BlocklyCompilerTestHost())
@@ -126,7 +127,7 @@ class BlocklyCompilerTestHost implements pxt.Host {
         } else if (pxt.appTarget && pxt.appTarget.bundledpkgs[module.id] && filename === pxt.CONFIG_NAME) {
             return pxt.appTarget.bundledpkgs[module.id][pxt.CONFIG_NAME];
         }
-        
+
         if (module.id == "testlib") {
             const split = filename.split(/[/\\]/);
             filename = "test-library/" + split[split.length - 1];
@@ -139,7 +140,7 @@ class BlocklyCompilerTestHost implements pxt.Host {
     writeFile(module: pxt.Package, filename: string, contents: string): void {
         if (filename == pxt.CONFIG_NAME)
             return; // ignore config writes
-        throw Util.oops("trying to write " + module + " / " + filename)
+        throw ts.pxtc.Util.oops("trying to write " + module + " / " + filename)
     }
 
     getHexInfoAsync(extInfo: pxtc.ExtensionInfo): Promise<pxtc.HexInfo> {
@@ -186,7 +187,7 @@ function getBlocksInfoAsync(): Promise<pxtc.BlocksInfo> {
             // decompile to blocks
             let apis = pxtc.getApiInfo(opts, resp.ast);
             let blocksInfo = pxtc.getBlocksInfo(apis);
-            pxt.blocks.initBlocks(blocksInfo);
+            pxt.blocks.initializeAndInject(blocksInfo);
 
             cachedBlocksInfo = blocksInfo;
 
@@ -198,7 +199,7 @@ function blockTestAsync(name: string) {
     let blocksFile: string;
     let tsFile: string;
     return pxt.Util.httpGetTextAsync(WEB_PREFIX + '/tests/' + name + '.blocks')
-        .then(res =>  {
+        .then(res => {
             blocksFile = res;
             return pxt.Util.httpGetTextAsync(WEB_PREFIX + '/baselines/' + name + '.ts')
         }, err => fail(`Unable to get ${name}.blocks: ` + JSON.stringify(err)))
@@ -210,8 +211,7 @@ function blockTestAsync(name: string) {
             const workspace = new Blockly.Workspace();
             (Blockly as any).mainWorkspace = workspace;
             const xml = Blockly.Xml.textToDom(blocksFile);
-            Blockly.Xml.domToWorkspace(xml, workspace);
-
+            pxt.blocks.domToWorkspaceNoEvents(xml, workspace);
             return pxt.blocks.compileAsync(workspace, blocksInfo)
         }, err => fail(`Unable to get block info: ` + JSON.stringify(err)))
         .then((res: pxt.blocks.BlockCompilationResult) => {
@@ -220,12 +220,16 @@ function blockTestAsync(name: string) {
             const compiledTs = res.source.trim().replace(/\s+/g, " ");
             const baselineTs = tsFile.trim().replace(/\s+/g, " ");
 
-            chai.assert(compiledTs === baselineTs, "Compiled result did not match baseline");
+            if (compiledTs !== baselineTs) {
+                console.log(compiledTs);
+            }
+
+            chai.assert(compiledTs === baselineTs, "Compiled result did not match baseline: " + name + " " + res.source);
         }, err => fail('Compiling blocks failed'));
 }
 
-describe("blockly compiler", function() {
-    this.timeout(3000);
+describe("blockly compiler", function () {
+    this.timeout(5000);
 
     describe("compiling lists", () => {
         it("should handle unambiguously typed list generics", (done: () => void) => {
@@ -278,6 +282,10 @@ describe("blockly compiler", function() {
 
         it("should handle empty array blocks", (done: () => void) => {
             blockTestAsync("lists_empty_arrays").then(done, done);
+        });
+
+        it("should handle functions with list return types", (done: () => void) => {
+            blockTestAsync("array_return_type").then(done, done);
         });
     });
 
@@ -334,8 +342,52 @@ describe("blockly compiler", function() {
             blockTestAsync("variables_names").then(done, done);
         });
 
+        it("should change variable names that collide with tagged template function names", (done: () => void) => {
+            blockTestAsync("tagged_template_variable").then(done, done);
+        });
+
+        it("should change function names that collide with tagged template function names", (done: () => void) => {
+            blockTestAsync("tagged_template_function").then(done, done);
+        });
+
+        it("should change variable and function names that collide with namespace names", (done: () => void) => {
+            blockTestAsync("namespace_variable_rename").then(done, done);
+        });
+
         it("should change reserved names", (done: () => void) => {
             blockTestAsync("variables_reserved_names").then(done, done);
+        });
+
+        it("should handle collisions with variables declared by the destructuring mutator", (done: () => void) => {
+            blockTestAsync("old_radio_mutator").then(done, done);
+        });
+
+        it("should handle collisions with variables declared by callback arguments", (done: () => void) => {
+            blockTestAsync("new_radio_block").then(done, done);
+        });
+
+        it("should handle collisions with variables declared by the minecraft destructuring mutator", (done: () => void) => {
+            blockTestAsync("mc_old_chat_blocks").then(done, done);
+        });
+
+        it("should handle collisions with variables declared by optional callback arguments", (done: () => void) => {
+            blockTestAsync("mc_chat_blocks").then(done, done);
+        });
+
+        it("should hoist variable declarations when the first set references the target", (done: () => void) => {
+            blockTestAsync("self_reference_vars").then(done, done);
+        });
+
+        it("should allow variables declared in a for-loop at the top of on-start", (done: () => void) => {
+            blockTestAsync("on_start_with_for_loop").then(done, done);
+        });
+
+        it("should handle variables declared within grey blocks", (done: () => void) => {
+            blockTestAsync("grey_block_declared_vars").then(done, done);
+        });
+
+        it("should declare variable types when the initializer expression has a generic type", (done: () => void) => {
+            blockTestAsync("array_type_declaration_in_set").then(done, done);
         });
     });
 
@@ -343,17 +395,73 @@ describe("blockly compiler", function() {
         it("should handle name collisions", (done: () => void) => {
             blockTestAsync("functions_names").then(done, done);
         });
+
+        it("should handle function declarations", (done: () => void) => {
+            blockTestAsync("functions_v2").then(done, done);
+        });
+
+        it("should handle function reporters", (done: () => void) => {
+            blockTestAsync("functions_v2_reporters").then(done, done);
+        });
+
+        it("should narrow variable types when used as function call arguments", (done: () => void) => {
+            blockTestAsync("function_call_inference").then(done, done);
+        });
     });
 
     describe("compiling special blocks", () => {
         it("should compile the predicate in pause until", done => {
             blockTestAsync("pause_until").then(done, done);
         });
+
+        it("should implicitly convert arguments marked as toString to a string", done => {
+            blockTestAsync("to_string_arg").then(done, done);
+        });
+
+        it("should convert handler parameters to draggable variables", done => {
+            blockTestAsync("draggable_parameters").then(done, done);
+        });
+
+        it("should set the right check for primitive draggable parameters in blockly loader", done => {
+            blockTestAsync("draggable_primitive_reporter").then(done, done);
+        });
     });
 
     describe("compiling expandable blocks", () => {
         it("should handle blocks with optional arguments", done => {
             blockTestAsync("expandable_basic").then(done, done);
+        });
+    });
+
+    describe("compiling ENUM_GET blocks", () => {
+        it("should handle simple enum values", done => {
+            blockTestAsync("enum_define").then(done, done);
+        });
+
+        describe("with start value set", () => {
+            it("should handle conformant values", done => {
+                blockTestAsync("enum_define_start_value").then(done, done);
+            });
+
+            it("should compile values even if they are invalid", done => {
+                blockTestAsync("enum_define_start_value_bad_start").then(done, done);
+            });
+        });
+
+        describe("with bit mask set", () => {
+            it("should handle conformant values", done => {
+                blockTestAsync("enum_define_bit_mask").then(done, done);
+            });
+
+            it("should compile values even if they are invalid", done => {
+                blockTestAsync("enum_define_bit_mask_bad_values").then(done, done);
+            });
+        });
+    });
+
+    describe("compiling events blocks", () => {
+        it("should handle APIs where the handler's type uses the Action alias", done => {
+            blockTestAsync("action_event").then(done, done);
         });
     })
 });

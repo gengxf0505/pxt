@@ -1,6 +1,9 @@
+/* tslint:disable:no-conditional-assignment */
 // TODO: add a macro facility to make 8-bit assembly easier?
 
 namespace ts.pxtc.assembler {
+
+    export let debug = false
 
     export interface InlineError {
         scope: string;
@@ -252,6 +255,7 @@ namespace ts.pxtc.assembler {
         private userLabelsCache: pxt.Map<number>;
         private stackpointers: pxt.Map<number> = {};
         private stack = 0;
+        public commPtr = 0;
         public peepOps = 0;
         public peepDel = 0;
         public peepCounts: pxt.Map<number> = {}
@@ -285,7 +289,9 @@ namespace ts.pxtc.assembler {
             if (!s)
                 return null;
 
-            if (s == "0") return 0;
+            // fast path
+            if (/^\d+$/.test(s))
+                return parseInt(s, 10)
 
             let mul = 1
 
@@ -307,7 +313,9 @@ namespace ts.pxtc.assembler {
                 s = s.slice(1)
             }
 
-            let v: number = null
+            // decimal encoding; fast-ish path
+            if (/^\d+$/.test(s))
+                return mul * parseInt(s, 10)
 
             // allow or'ing of 1 to least-signficant bit
             if (U.endsWith(s, "|1")) {
@@ -322,7 +330,15 @@ namespace ts.pxtc.assembler {
                 return this.parseOneInt(s.slice(0, s.length - 2)) + 1
             }
 
+            let shm = /(.*)>>(\d+)$/.exec(s)
+            if (shm) {
+                let left = this.parseOneInt(shm[1])
+                let mask = this.baseOffset & ~0xffffff
+                left &= ~mask;
+                return left >> parseInt(shm[2])
+            }
 
+            let v: number = null
 
             // handle hexadecimal and binary encodings
             if (s[0] == "0") {
@@ -335,15 +351,11 @@ namespace ts.pxtc.assembler {
                 }
             }
 
-            // decimal encoding
-            let m = /^(\d+)$/i.exec(s)
-            if (m) v = parseInt(m[1], 10)
-
             // stack-specific processing
 
             // more special characters to handle
             if (s.indexOf("@") >= 0) {
-                m = /^(\w+)@(-?\d+)$/.exec(s)
+                let m = /^(\w+)@(-?\d+)$/.exec(s)
                 if (m) {
                     if (mul != 1)
                         this.directiveError(lf("multiplication not supported with saved stacks"));
@@ -360,9 +372,9 @@ namespace ts.pxtc.assembler {
                 if (m && this.looksLikeLabel(m[1])) {
                     v = this.lookupLabel(m[1], true)
                     if (v != null) {
-                        if (m[2] == "fn")
-                            v = this.ei.toFnPtr(v, this.baseOffset)
-                        else {
+                        if (m[2] == "fn") {
+                            v = this.ei.toFnPtr(v, this.baseOffset, m[1])
+                        } else {
                             v >>= 1;
                             if (0 <= v && v <= 0xffff) {
                                 if (m[2] == "hi")
@@ -590,6 +602,14 @@ namespace ts.pxtc.assembler {
                         }
                     } else this.directiveError(lf("expecting number"));
                     break;
+                case ".p2align":
+                    expectOne();
+                    num0 = this.parseOneInt(words[1]);
+                    if (num0 != null) {
+                        this.align(1 << num0);
+                    } else this.directiveError(lf("expecting number"));
+                    break;
+
                 case ".byte":
                     this.emitBytes(words);
                     break;
@@ -609,6 +629,7 @@ namespace ts.pxtc.assembler {
                     break;
                 case ".word":
                 case ".4bytes":
+                case ".long":
                     // TODO: a word is machine-dependent (16-bit for AVR, 32-bit for ARM)
                     this.parseNumbers(words).forEach(n => {
                         // we allow negative numbers
@@ -646,10 +667,12 @@ namespace ts.pxtc.assembler {
                     break;
 
                 case "@stackempty":
-                    if (this.stackpointers[words[1]] == null)
-                        this.directiveError(lf("no such saved stack"))
-                    else if (this.stackpointers[words[1]] != this.stack)
-                        this.directiveError(lf("stack mismatch"))
+                    if (this.checkStack) {
+                        if (this.stackpointers[words[1]] == null)
+                            this.directiveError(lf("no such saved stack"))
+                        else if (this.stackpointers[words[1]] != this.stack)
+                            this.directiveError(lf("stack mismatch"))
+                    }
                     break;
 
                 case "@scope":
@@ -657,6 +680,7 @@ namespace ts.pxtc.assembler {
                     this.currLineNo = this.scope ? 0 : this.realCurrLineNo;
                     break;
 
+                case ".syntax":
                 case "@nostackcheck":
                     this.checkStack = false
                     break
@@ -673,6 +697,30 @@ namespace ts.pxtc.assembler {
                     this.scope = "$S" + this.scopeId++
                     break;
 
+                case ".comm": {
+                    words = words.filter(x => x != ",")
+                    words.shift()
+                    let sz = this.parseOneInt(words[1])
+                    let align = 0
+                    if (words[2])
+                        align = this.parseOneInt(words[2])
+                    else
+                        align = 4 // not quite what AS does...
+                    let val = this.lookupLabel(words[0])
+                    if (val == null) {
+                        if (!this.commPtr) {
+                            this.commPtr = this.lookupExternalLabel("_pxt_comm_base") || 0
+                            if (!this.commPtr)
+                                this.directiveError(lf("PXT_COMM_BASE not defined"))
+                        }
+                        while (this.commPtr & (align - 1))
+                            this.commPtr++
+                        this.labels[this.scopedName(words[0])] = this.commPtr - this.baseOffset
+                        this.commPtr += sz
+                    }
+                    break
+                }
+
                 case ".file":
                 case ".text":
                 case ".cpu":
@@ -681,6 +729,13 @@ namespace ts.pxtc.assembler {
                 case ".code":
                 case ".thumb_func":
                 case ".type":
+                case ".fnstart":
+                case ".save":
+                case ".size":
+                case ".fnend":
+                case ".pad":
+                case ".globl": // TODO might need this one
+                case ".local":
                     break;
 
                 case "@":
@@ -858,13 +913,21 @@ namespace ts.pxtc.assembler {
 
 
         public getSource(clean: boolean, numStmts = 1, flashSize = 0) {
+            let lenPrev = 0
+            let size = (lbl: string) => {
+                let curr = this.labels[lbl] || lenPrev
+                let sz = curr - lenPrev
+                lenPrev = curr
+                return sz
+            }
             let lenTotal = this.buf ? this.location() : 0
-            let lenThumb = this.labels["_program_end"] || lenTotal;
-            let lenFrag = this.labels["_frag_start"] || 0
-            if (lenFrag) lenFrag = this.labels["_js_end"] - lenFrag
-            let lenLit = this.labels["_program_end"]
-            if (lenLit) lenLit -= this.labels["_js_end"]
-            let totalSize = lenTotal + this.baseOffset
+            let lenCode = size("_code_end")
+            let lenHelpers = size("_helpers_end")
+            let lenVtables = size("_vtables_end")
+            let lenLiterals = size("_literals_end")
+            let lenAllCode = lenPrev
+            let totalSize = (lenTotal + this.baseOffset) & 0xffffff
+
             if (flashSize && totalSize > flashSize)
                 U.userError(lf("program too big by {0} bytes!", totalSize - flashSize))
             flashSize = flashSize || 128 * 1024
@@ -873,11 +936,12 @@ namespace ts.pxtc.assembler {
                 flashSize - totalSize)
             let res =
                 // ARM-specific
-                lf("; code sizes (bytes): {0} (incl. {1} frags, and {2} lits); src size {3}\n",
-                    lenThumb, lenFrag, lenLit, lenTotal - lenThumb) +
-                lf("; assembly: {0} lines; density: {1} bytes/stmt\n",
+                lf("; generated code sizes (bytes): {0} (incl. {1} user, {2} helpers, {3} vtables, {4} lits); src size {5}\n",
+                    lenAllCode, lenCode, lenHelpers, lenVtables, lenLiterals,
+                    lenTotal - lenAllCode) +
+                lf("; assembly: {0} lines; density: {1} bytes/stmt; ({2} stmts)\n",
                     this.lines.length,
-                    Math.round(100 * (lenThumb - lenLit) / numStmts) / 100) +
+                    Math.round(100 * lenCode / numStmts) / 100, numStmts) +
                 totalInfo + "\n" +
                 this.stats + "\n\n"
 
@@ -902,7 +966,7 @@ namespace ts.pxtc.assembler {
                     text = text.replace(/; WAS: .*/, "")
                     if (!text.trim()) return;
                 }
-                if (this.location() == this.buf.length)
+                if (debug)
                     if (ln.type == "label" || ln.type == "instruction")
                         text += ` \t; 0x${(ln.location + this.baseOffset).toString(16)}`
                 res += text + "\n"
@@ -928,6 +992,11 @@ namespace ts.pxtc.assembler {
             }
         }
 
+        private clearLabels() {
+            this.labels = {}
+            this.commPtr = 0
+        }
+
         private peepPass(reallyFinal: boolean) {
             if (this.disablePeepHole)
                 return;
@@ -939,7 +1008,7 @@ namespace ts.pxtc.assembler {
 
             this.throwOnError = true;
             this.finalEmit = false;
-            this.labels = {};
+            this.clearLabels();
             this.iterLines();
             assert(!this.checkStack || this.stack == 0);
             this.finalEmit = true;
@@ -964,7 +1033,7 @@ namespace ts.pxtc.assembler {
             if (this.errors.length > 0)
                 return;
 
-            this.labels = {};
+            this.clearLabels();
             this.iterLines();
 
             if (this.checkStack && this.stack != 0)
@@ -974,8 +1043,7 @@ namespace ts.pxtc.assembler {
                 return;
 
             this.ei.expandLdlit(this);
-            this.ei.commonalize(this);
-            this.labels = {};
+            this.clearLabels();
             this.iterLines();
 
             this.finalEmit = true;
@@ -1045,7 +1113,7 @@ namespace ts.pxtc.assembler {
             this.instructions = {}
         }
 
-        public toFnPtr(v: number, baseOff: number) {
+        public toFnPtr(v: number, baseOff: number, lbl: string) {
             return v;
         }
 
@@ -1105,8 +1173,6 @@ namespace ts.pxtc.assembler {
             assert(false)
         }
 
-        public commonalize(file: assembler.File): void {
-        }
         public expandLdlit(f: File): void {
         }
 

@@ -44,7 +44,7 @@ interface has two relevant fields that are populated as specified below:
 ### bundleddirs: string[]
 
 A target can use many packages in addition to the required "corepkg". To 
-ensure that a package is bundled into the web app, you must include it in this list. For 
+ensure that an extension is bundled into the web app, you must include it in this list. For 
 example in http://github.com/microsoft/pxt-microbit/blob/master, we see:
 ```typescript-ignore
     "bundleddirs": [
@@ -221,7 +221,6 @@ Each target has one board (plus optional parts).
         // buttons and parts
         hideRestart?: boolean;      // hide the restart button 
         hideFullscreen?: boolean;   // hide the fullscreen button
-        enableTrace?: boolean;      // enable the slow-mode (snail) button
         parts?: boolean;            // parts enabled?
         instructions?: boolean;     // generate step-by-step wiring instructions (Make button)
 

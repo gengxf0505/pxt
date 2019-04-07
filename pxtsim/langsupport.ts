@@ -1,7 +1,7 @@
 // APIs for language/runtime support (records, locals, function values)
 
 namespace pxsim {
-    export var quiet = false;
+    export let quiet = false;
 
     export function check(cond: boolean, msg: string = "sim: check failed") {
         if (!cond) {
@@ -10,8 +10,8 @@ namespace pxsim {
         }
     }
 
-    export let floatingPoint = false;
     export let refCounting = true;
+    export let title = "";
     let cfgKey: Map<number> = {}
     let cfg: Map<number> = {}
 
@@ -36,6 +36,10 @@ namespace pxsim {
         return Object.keys(cfgKey)
     }
 
+    export function setConfigKey(key: string, id: number) {
+        cfgKey[key] = id;
+    }
+
     export function setConfig(id: number, val: number) {
         cfg[id] = val
     }
@@ -55,8 +59,8 @@ namespace pxsim {
         return { cfg, cfgKey }
     }
 
-    export function enableFloatingPoint() {
-        floatingPoint = true
+    export function setTitle(t: string) {
+        title = t;
     }
 
     export class RefObject {
@@ -76,55 +80,68 @@ namespace pxsim {
             if (runtime && runtime.refCountingDebug)
                 console.log(`RefObject id:${this.id} refs:${this.refcnt}`)
         }
+
+        // render a debug preview string
+        toDebugString(): string {
+            return "(object)";
+        }
+
+        static toAny(o: any): any {
+            if (o && o.toAny) return o.toAny();
+            return o;
+        }
+
+        static toDebugString(o: any): string {
+            if (o === null) return "null";
+            if (o === undefined) return "undefined;"
+            if (o.vtable && o.vtable.name) return o.vtable.name;
+            if (o.toDebugString) return o.toDebugString();
+            if (typeof o == "string") return JSON.stringify(o);
+            return o.toString();
+        }
     }
 
     export class FnWrapper {
         constructor(
             public func: LabelFn,
             public caps: any[],
-            public a0: any,
-            public a1: any,
-            public a2: any,
+            public args: any[],
             public cb: ResumeFn) { }
     }
 
     export interface VTable {
         name: string;
         methods: LabelFn[];
-        refmask: boolean[];
+        numFields: number;
+        toStringMethod?: LabelFn;
+        classNo: number;
     }
 
     export class RefRecord extends RefObject {
-        fields: any[] = [];
+        fields: any = {};
         vtable: VTable;
 
         destroy() {
-            let refmask = this.vtable.refmask
-            for (let i = 0; i < refmask.length; ++i)
-                if (refmask[i]) decr(this.fields[i])
+            for (let k of Object.keys(this.fields))
+                decr(this.fields[k])
             this.fields = null
             this.vtable = null
         }
 
-        isRef(idx: number) {
-            check(0 <= idx && idx < this.fields.length)
-            return !!this.vtable.refmask[idx]
-        }
-
         print() {
             if (runtime && runtime.refCountingDebug)
-                console.log(`RefRecord id:${this.id} (${this.vtable.name}) len:${this.fields.length}`)
+                console.log(`RefRecord id:${this.id} (${this.vtable.name})`)
         }
     }
 
     export class RefAction extends RefObject {
         fields: any[] = [];
-        reflen: number
+        len: number
         func: LabelFn;
 
         isRef(idx: number) {
             check(0 <= idx && idx < this.fields.length)
-            return idx < this.reflen
+            return idx < this.len
         }
 
         ldclo(n: number) {
@@ -134,7 +151,7 @@ namespace pxsim {
         }
 
         destroy() {
-            for (let i = 0; i < this.reflen; ++i)
+            for (let i = 0; i < this.len; ++i)
                 decr(this.fields[i])
             this.fields = null
             this.func = null
@@ -147,47 +164,37 @@ namespace pxsim {
     }
 
     export namespace pxtcore {
-        export function mkAction(reflen: number, len: number, fn: LabelFn) {
+        export function mkAction(len: number, fn: LabelFn) {
             let r = new RefAction();
-            r.reflen = reflen
+            r.len = len
             r.func = fn
             for (let i = 0; i < len; ++i)
                 r.fields.push(null)
             return r
         }
 
-        export function runAction3(a: RefAction, a0: any, a1: any, a2: any) {
+        export function runAction(a: RefAction, args: any[]) {
             let cb = getResume();
 
             if (a instanceof RefAction) {
                 pxtrt.incr(a)
-                cb(new FnWrapper(a.func, a.fields, a0, a1, a2, () => {
+                cb(new FnWrapper(a.func, a.fields, args, () => {
                     pxtrt.decr(a)
                 }))
             } else {
                 // no-closure case
-                cb(new FnWrapper(<any>a, null, a0, a1, a2, null))
+                cb(new FnWrapper(<any>a, null, args, null))
             }
         }
 
-        export function runAction2(a: RefAction, a0: any, a1: any) {
-            runAction3(a, a0, a1, null)
-        }
-
-        export function runAction1(a: RefAction, v: any) {
-            runAction3(a, v, null, null)
-        }
-
-        export function runAction0(a: RefAction) {
-            runAction3(a, null, null, null)
-        }
-    }
-
-    export class RefLocal extends RefObject {
-        v = 0;
-
-        print() {
-            //console.log(`RefLocal id:${this.id} refs:${this.refcnt} v:${this.v}`)
+        export function dumpPerfCounters() {
+            if (!runtime || !runtime.perfCounters)
+                return
+            let csv = "calls,us,name\n"
+            for (let p of runtime.perfCounters) {
+                csv += `${p.numstops},${p.value},${p.name}\n`
+            }
+            console.log(csv)
         }
     }
 
@@ -205,7 +212,7 @@ namespace pxsim {
     }
 
     export interface MapEntry {
-        key: number;
+        key: string;
         val: any;
     }
 
@@ -213,9 +220,9 @@ namespace pxsim {
         vtable = 42;
         data: MapEntry[] = [];
 
-        findIdx(key: number) {
+        findIdx(key: string) {
             for (let i = 0; i < this.data.length; ++i) {
-                if (this.data[i].key >> 1 == key)
+                if (this.data[i].key == key)
                     return i;
             }
             return -1;
@@ -224,9 +231,7 @@ namespace pxsim {
         destroy() {
             super.destroy()
             for (let i = 0; i < this.data.length; ++i) {
-                if (this.data[i].key & 1) {
-                    decr(this.data[i].val);
-                }
+                decr(this.data[i].val);
                 this.data[i].val = 0;
             }
             this.data = []
@@ -236,11 +241,18 @@ namespace pxsim {
             if (runtime && runtime.refCountingDebug)
                 console.log(`RefMap id:${this.id} refs:${this.refcnt} size:${this.data.length}`)
         }
+
+        toAny(): any {
+            const r: any = {};
+            this.data.forEach(d => {
+                r[d.key] = RefObject.toAny(d.val);
+            })
+            return r;
+        }
     }
 
 
     function num(v: any) {
-        if (!floatingPoint && v === undefined) return 0;
         return v;
     }
 
@@ -298,15 +310,11 @@ namespace pxsim {
         export function toFloat(v: number) { return v }
 
         export function ignore(v: any) { return v; }
-
-        export function ptreqDecr(a: any, b: any) {
-            return Number_.eqDecr(a, b)
-        }
     }
 
     export namespace pxtcore {
-        export var incr = pxsim.incr;
-        export var decr = pxsim.decr;
+        export let incr = pxsim.incr;
+        export let decr = pxsim.decr;
 
         export function ptrOfLiteral(v: any) {
             return v;
@@ -314,10 +322,6 @@ namespace pxsim {
 
         export function debugMemLeaks() {
             dumpLivePointers();
-        }
-
-        export function allocate() {
-            U.userError("allocate() called in simulator")
         }
 
         export function templateHash() {
@@ -356,8 +360,8 @@ namespace pxsim {
     }
 
     export namespace pxtrt {
-        export var incr = pxsim.incr;
-        export var decr = pxsim.decr;
+        export let incr = pxsim.incr;
+        export let decr = pxsim.decr;
 
         export function toInt8(v: number) {
             return ((v & 0xff) << 24) >> 24
@@ -415,56 +419,13 @@ namespace pxsim {
             return s
         }
 
-        export function ldfld(r: RefRecord, idx: number) {
-            nullCheck(r)
-            check(!r.isRef(idx))
-            let v = num(r.fields[idx])
-            decr(r)
-            return v;
-        }
-
-        export function stfld(r: RefRecord, idx: number, v: any) {
-            nullCheck(r)
-            check(!r.isRef(idx))
-            r.fields[idx] = v;
-            decr(r)
-        }
-
-        export function ldfldRef(r: RefRecord, idx: number) {
-            nullCheck(r)
-            check(r.isRef(idx))
-            let v = incr(ref(r.fields[idx]))
-            decr(r)
-            return v
-        }
-
-        export function stfldRef(r: RefRecord, idx: number, v: any) {
-            nullCheck(r)
-            check(r.isRef(idx))
-            decr(r.fields[idx])
-            r.fields[idx] = v
-            decr(r)
-        }
-
-        export function ldloc(r: RefLocal) {
-            return r.v
-        }
-
-        export function ldlocRef(r: RefLocal) {
+        export function ldlocRef(r: RefRefLocal) {
             return incr(r.v)
-        }
-
-        export function stloc(r: RefLocal, v: any) {
-            r.v = v;
         }
 
         export function stlocRef(r: RefRefLocal, v: any) {
             decr(r.v)
             r.v = v;
-        }
-
-        export function mkloc() {
-            return new RefLocal();
         }
 
         export function mklocRef() {
@@ -488,18 +449,21 @@ namespace pxsim {
             return new RefMap();
         }
 
+        export let mapKeyNames: string[]
+
         export function mapGet(map: RefMap, key: number) {
-            let i = map.findIdx(key);
-            if (i < 0) {
-                decr(map)
-                return 0;
-            }
-            let r = map.data[i].val;
-            decr(map)
-            return r;
+            return mapGetByString(map, mapKeyNames[key])
         }
 
-        export function mapGetRef(map: RefMap, key: number) {
+        export function mapSet(map: RefMap, key: number, val: any) {
+            return mapSetByString(map, mapKeyNames[key], val)
+        }
+
+        export function mapGetByString(map: RefMap, key: string) {
+            if (map instanceof RefRecord) {
+                let r = map as RefRecord
+                return r.fields[key]
+            }
             let i = map.findIdx(key);
             if (i < 0) {
                 decr(map);
@@ -510,55 +474,48 @@ namespace pxsim {
             return r;
         }
 
-        export function mapSet(map: RefMap, key: number, val: any) {
+        export const mapSetGeneric = mapSetByString
+        export const mapGetGeneric = mapGetByString
+
+        export function mapSetByString(map: RefMap, key: string, val: any) {
+            if (map instanceof RefRecord) {
+                let r = map as RefRecord
+                r.fields[key] = val
+                return
+            }
             let i = map.findIdx(key);
             if (i < 0) {
                 map.data.push({
-                    key: key << 1,
-                    val: val
+                    key: key,
+                    val: val,
                 });
             } else {
-                if (map.data[i].key & 1) {
-                    decr(map.data[i].val);
-                    map.data[i].key = key << 1;
-                }
+                decr(map.data[i].val);
                 map.data[i].val = val;
             }
             decr(map)
         }
 
-        export function mapSetRef(map: RefMap, key: number, val: any) {
-            let i = map.findIdx(key);
-            if (i < 0) {
-                map.data.push({
-                    key: (key << 1) | 1,
-                    val: val
-                });
-            } else {
-                if (map.data[i].key & 1) {
-                    decr(map.data[i].val);
-                } else {
-                    map.data[i].key = (key << 1) | 1;
+        export function keysOf(v: RefMap) {
+            let r = new RefCollection()
+            if (v instanceof RefMap)
+                for (let k of v.data) {
+                    r.push(k.key)
                 }
-                map.data[i].val = val;
-            }
-            decr(map)
+            return r
         }
 
         // these are never used in simulator; silence the warnings
-        export var getGlobalsPtr: any;
+        export let getGlobalsPtr: any;
+        export let lookupMapKey: any;
     }
 
 
     export namespace pxtcore {
         export function mkClassInstance(vtable: VTable) {
             check(!!vtable.methods)
-            check(!!vtable.refmask)
             let r = new RefRecord()
             r.vtable = vtable
-            let len = vtable.refmask.length
-            for (let i = 0; i < len; ++i)
-                r.fields.push(floatingPoint ? undefined : 0)
             return r
         }
 
@@ -571,23 +528,51 @@ namespace pxsim {
         }
 
         // these are never used in simulator; silence the warnings
-        export var getNumGlobals: any;
-        export var RefRecord_destroy: any;
-        export var RefRecord_print: any;
-        export var anyPrint: any;
-        export var dumpDmesg: any;
-        export var getVTable: any;
-        export var valType: any;
-        export var typeOf: any;
-        export var lookupPin: any;
+        export let getNumGlobals: any;
+        export let RefRecord_destroy: any;
+        export let RefRecord_print: any;
+        export let anyPrint: any;
+        export let dumpDmesg: any;
+        export let getVTable: any;
+        export let valType: any;
+        export let lookupPin: any;
+        export let deleteRefObject: any;
+        export let popThreadContext: any;
+        export let pushThreadContext: any;
+        export let failedCast: any;
+        export let missingProperty: any;
+        export let string_vt: any;
+        export let buffer_vt: any;
+        export let number_vt: any;
+        export let RefAction_vtable: any;
+        export let RefRecord_scan: any;
+        export let RefRecord_gcsize: any;
+        export let startPerfCounter: any;
+        export let stopPerfCounter: any;
+        export let string_inline_ascii_vt: any;
+        export let string_inline_utf8_vt: any;
+        export let string_cons_vt: any;
+        export let string_skiplist16_vt: any;
+
+        export function typeOf(obj: any) {
+            return typeof obj;
+        }
     }
 
+    // these can only be used from assembly - silence warnings
+    export let __aeabi_dadd: any;
+    export let __aeabi_dcmplt: any;
+    export let __aeabi_dcmpgt: any;
+    export let __aeabi_dsub: any;
+    export let __aeabi_ddiv: any;
+    export let __aeabi_dmul: any;
+
     export namespace thread {
-        export var panic = pxtrt.panic;
+        export let panic = pxtrt.panic;
 
         export function pause(ms: number) {
             let cb = getResume();
-            setTimeout(() => { cb() }, ms)
+            runtime.schedule(() => { cb() }, ms)
         }
 
         export function runInBackground(a: RefAction) {

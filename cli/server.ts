@@ -9,6 +9,7 @@ import * as os from 'os';
 import * as util from 'util';
 import * as hid from './hid';
 import * as serial from './serial';
+import * as net from 'net';
 
 import U = pxt.Util;
 import Cloud = pxt.Cloud;
@@ -21,8 +22,8 @@ let docfilesdirs = [""]
 let userProjectsDir = path.join(process.cwd(), userProjectsDirName);
 let docsDir = ""
 let packagedDir = ""
-let localHexDir = path.join("built", "hexcache");
-let electronHandlers: pxt.Map<ElectronHandler> = {};
+let localHexCacheDir = path.join("built", "hexcache");
+let serveOptions: ServeOptions;
 
 function setupDocfilesdirs() {
     docfilesdirs = [
@@ -39,6 +40,7 @@ function setupRootDir() {
         "built/web",
         path.join(nodeutil.targetDir, "built"),
         path.join(nodeutil.targetDir, "sim/public"),
+        path.join(nodeutil.targetDir, "node_modules", `pxt-${pxt.appTarget.id}-sim`, "public"),
         path.join(nodeutil.pxtCoreDir, "built/web"),
         path.join(nodeutil.pxtCoreDir, "webapp/public")
     ]
@@ -54,33 +56,6 @@ function setupRootDir() {
 }
 
 function setupProjectsDir() {
-    if (serveOptions && serveOptions.electron) {
-        let projectsRootDir = process.cwd();
-
-        if (/^win/.test(os.platform())) {
-            // Use registry to query path of My Documents folder
-            let regQueryResult = "";
-
-            try {
-                let regQueryResult = child_process.execSync("reg query \"HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders\" /v Personal").toString();
-                let documentsPath = /personal(?:\s+\w+)\s+(.*)/gmi.exec(regQueryResult)[1];
-
-                if (documentsPath) {
-                    projectsRootDir = documentsPath;
-                } else {
-                    projectsRootDir = os.homedir();
-                }
-            } catch (e) {
-                // Fallback to Home directory
-                projectsRootDir = os.homedir();
-            }
-        } else {
-            projectsRootDir = os.homedir();
-        }
-
-        userProjectsDir = path.join(projectsRootDir, userProjectsDirName, pxt.appTarget.appTheme.id);
-    }
-
     nodeutil.mkdirP(userProjectsDir);
 }
 
@@ -109,41 +84,71 @@ function throwError(code: number, msg: string = null) {
 type FsFile = pxt.FsFile;
 type FsPkg = pxt.FsPkg;
 
-function readPkgAsync(logicalDirname: string, fileContents = false): Promise<FsPkg> {
+function readAssetsAsync(logicalDirname: string): Promise<any> {
+    let dirname = path.join(userProjectsDir, logicalDirname, "assets")
+    /* tslint:disable:no-http-string */
+    let pref = "http://" + serveOptions.hostname + ":" + serveOptions.port + "/assets/" + logicalDirname + "/"
+    /* tslint:enable:no-http-string */
+    return readdirAsync(dirname)
+        .catch(err => [])
+        .then(res => Promise.map(res, fn => statAsync(path.join(dirname, fn)).then(res => ({
+            name: fn,
+            size: res.size,
+            url: pref + fn
+        }))))
+        .then(res => ({
+            files: res
+        }))
+}
+
+const HEADER_JSON = ".header.json"
+
+async function readPkgAsync(logicalDirname: string, fileContents = false): Promise<FsPkg> {
     let dirname = path.join(userProjectsDir, logicalDirname)
-    let r: FsPkg = undefined;
-    return readFileAsync(path.join(dirname, pxt.CONFIG_NAME))
-        .then(buf => {
-            let cfg: pxt.PackageConfig = JSON.parse(buf.toString("utf8"))
-            let files = [pxt.CONFIG_NAME].concat(cfg.files || []).concat(cfg.testFiles || [])
-            return Promise.map(files, fn =>
-                statOptAsync(path.join(dirname, fn))
-                    .then<FsFile>(st => {
-                        let r: FsFile = {
-                            name: fn,
-                            mtime: st ? st.mtime.getTime() : null
-                        }
-                        if (st == null || !fileContents)
-                            return r
-                        else
-                            return readFileAsync(path.join(dirname, fn))
-                                .then(buf => {
-                                    r.content = buf.toString("utf8")
-                                    return r
-                                })
-                    }))
-                .then(files => {
-                    r = {
-                        path: logicalDirname,
-                        config: cfg,
-                        files: files
-                    };
-                    return existsAsync(path.join(dirname, "icon.jpeg"));
-                }).then(icon => {
-                    r.icon = icon ? "/icon/" + logicalDirname : undefined;
-                    return r;
-                })
-        })
+    let buf = await readFileAsync(path.join(dirname, pxt.CONFIG_NAME))
+    let cfg: pxt.PackageConfig = JSON.parse(buf.toString("utf8"))
+    let r: FsPkg = {
+        path: logicalDirname,
+        config: cfg,
+        header: null,
+        files: []
+    };
+
+    for (let fn of pxt.allPkgFiles(cfg).concat([pxt.github.GIT_JSON])) {
+        let st = await statOptAsync(path.join(dirname, fn))
+        let ff: FsFile = {
+            name: fn,
+            mtime: st ? st.mtime.getTime() : null
+        }
+
+        let thisFileContents = st && fileContents
+
+        if (fn == pxt.github.GIT_JSON) {
+            // skip .git.json altogether if missing
+            if (!st) continue
+            thisFileContents = true
+        }
+
+        if (thisFileContents) {
+            let buf = await readFileAsync(path.join(dirname, fn))
+            ff.content = buf.toString("utf8")
+        }
+
+        r.files.push(ff)
+    }
+
+    if (await existsAsync(path.join(dirname, "icon.jpeg"))) {
+        r.icon = "/icon/" + logicalDirname
+    }
+
+    // now try reading the header
+    buf = await readFileAsync(path.join(dirname, HEADER_JSON))
+        .then(b => b, err => null)
+
+    if (buf && buf.length)
+        r.header = JSON.parse(buf.toString("utf8"))
+
+    return r
 }
 
 function writeScreenshotAsync(logicalDirname: string, screenshotUri: string, iconUri: string) {
@@ -166,6 +171,16 @@ function writeScreenshotAsync(logicalDirname: string, screenshotUri: string, ico
         writeUriAsync("screenshot", screenshotUri),
         writeUriAsync("icon", iconUri)
     ]).then(() => { });
+}
+
+function writePkgAssetAsync(logicalDirname: string, data: any) {
+    const dirname = path.join(userProjectsDir, logicalDirname, "assets")
+
+    nodeutil.mkdirP(dirname)
+    return writeFileAsync(dirname + "/" + data.name, new Buffer(data.data, data.encoding || "base64"))
+        .then(() => ({
+            name: data.name
+        }))
 }
 
 function writePkgAsync(logicalDirname: string, data: FsPkg) {
@@ -194,8 +209,16 @@ function writePkgAsync(logicalDirname: string, data: FsPkg) {
                 }
             }, err => { }))
         // no conflict, proceed with writing
-        .then(() => Promise.map(data.files, f =>
-            writeFileAsync(path.join(dirname, f.name), f.content)))
+        .then(() => Promise.map(data.files, f => {
+            let d = f.name.replace(/\/[^\/]*$/, "")
+            if (d != f.name)
+                nodeutil.mkdirP(path.join(dirname, d))
+            return writeFileAsync(path.join(dirname, f.name), f.content)
+        }))
+        .then(() => {
+            if (data.header)
+                return writeFileAsync(path.join(dirname, HEADER_JSON), JSON.stringify(data.header, null, 4))
+        })
         .then(() => readPkgAsync(logicalDirname, false))
 }
 
@@ -229,7 +252,7 @@ function getCachedHexAsync(sha: string): Promise<any> {
         return Promise.resolve();
     }
 
-    let hexFile = path.resolve(localHexDir, sha + ".hex");
+    let hexFile = path.resolve(localHexCacheDir, sha + ".hex");
 
     return existsAsync(hexFile)
         .then((results) => {
@@ -281,6 +304,11 @@ function handleApiAsync(req: http.IncomingMessage, res: http.ServerResponse, elt
     else if (cmd == "POST pkg")
         return readJsonAsync()
             .then(d => writePkgAsync(innerPath, d))
+    else if (cmd == "POST pkgasset")
+        return readJsonAsync()
+            .then(d => writePkgAssetAsync(innerPath, d))
+    else if (cmd == "GET pkgasset")
+        return readAssetsAsync(innerPath)
     else if (cmd == "POST deploy" && pxt.commands.deployCoreAsync)
         return readJsonAsync()
             .then(pxt.commands.deployCoreAsync)
@@ -307,7 +335,7 @@ function handleApiAsync(req: http.IncomingMessage, res: http.ServerResponse, elt
         // innerpath start with targetid
         return Promise.resolve(readMd(innerPath.slice(pxt.appTarget.id.length + 1)))
     }
-    else if (cmd == "GET config" && pxt.appTarget.id + "/targetconfig" == innerPath) {
+    else if (cmd == "GET config" && new RegExp(`${pxt.appTarget.id}\/targetconfig(\/v[0-9.]+)?$`).test(innerPath)) {
         // target config
         return readFileAsync("targetconfig.json").then(buf => JSON.parse(buf.toString("utf8")));
     }
@@ -352,13 +380,13 @@ export function expandHtml(html: string) {
 export function expandDocTemplateCore(template: string) {
     template = template
         .replace(/<!--\s*@include\s+(\S+)\s*-->/g,
-        (full, fn) => {
-            return `
+            (full, fn) => {
+                return `
 <!-- include ${fn} -->
 ${expandDocFileTemplate(fn)}
 <!-- end include ${fn} -->
 `
-        })
+            })
     return template
 }
 
@@ -369,9 +397,7 @@ export function expandDocFileTemplate(name: string) {
 }
 
 let wsSerialClients: WebSocket[] = [];
-let electronSocket: WebSocket = null;
 let webappReady = false;
-let electronPendingMessages: ElectronMessage[] = [];
 
 function initSocketServer(wsPort: number, hostname: string) {
     console.log(`starting local ws server at ${wsPort}...`)
@@ -411,7 +437,7 @@ function initSocketServer(wsPort: number, hostname: string) {
     }
 
     let hios: pxt.Map<Promise<pxt.HF2.Wrapper>> = {};
-    function startHID(request: any, socket: any, body: any) {
+    function startHID(request: http.IncomingMessage, socket: WebSocket, body: any) {
         let ws = new WebSocket(request, socket, body);
         ws.on('open', () => {
             ws.send(JSON.stringify({ id: "ready" }))
@@ -420,6 +446,20 @@ function initSocketServer(wsPort: number, hostname: string) {
             try {
                 let msg = JSON.parse(event.data);
                 pxt.debug(`hid: msg ${msg.op}`) // , objToString(msg.arg))
+
+                // check that HID is installed
+                if (!hid.isInstalled(true)) {
+                    if (!ws) return;
+                    ws.send(JSON.stringify({
+                        result: {
+                            errorMessage: "node-hid not installed",
+                        },
+                        op: msg.op,
+                        id: msg.id
+                    }))
+                    return;
+                }
+
                 Promise.resolve()
                     .then(() => {
                         let hio = hios[msg.arg.path]
@@ -472,9 +512,13 @@ function initSocketServer(wsPort: number, hostname: string) {
                                         .then(res => ({ data: U.toHex(res) }))
                                 });
                             case "sendserial":
-                                return hio.sendSerialAsync(U.fromHex(msg.arg.data), msg.arg.isError)
+                                return hio.sendSerialAsync(U.fromHex(msg.arg.data), msg.arg.isError);
                             case "list":
-                                return { devices: hid.getHF2Devices() } as any
+                                return hid.getHF2DevicesAsync()
+                                    .then(devices => { return { devices } as any; });
+                            default: // unknown message
+                                pxt.log(`unknown hid message ${msg.op}`)
+                                return null;
                         }
                     })
                     .done(resp => {
@@ -511,7 +555,97 @@ function initSocketServer(wsPort: number, hostname: string) {
         })
     }
 
-    function startDebug(request: any, socket: any, body: any) {
+    let openSockets: pxt.Map<net.Socket> = {};
+    function startTCP(request: http.IncomingMessage, socket: WebSocket, body: any) {
+        let ws = new WebSocket(request, socket, body);
+        let netSockets: net.Socket[] = []
+        ws.on('open', () => {
+            ws.send(JSON.stringify({ id: "ready" }))
+        })
+        ws.on('message', function (event: any) {
+            try {
+                let msg = JSON.parse(event.data);
+                pxt.debug(`tcp: msg ${msg.op}`) // , objToString(msg.arg))
+
+                Promise.resolve()
+                    .then(() => {
+                        let sock = openSockets[msg.arg.socket]
+                        switch (msg.op) {
+                            case "close":
+                                sock.end();
+                                let idx = netSockets.indexOf(sock)
+                                if (idx >= 0)
+                                    netSockets.splice(idx, 1)
+                                return {}
+                            case "open":
+                                return new Promise((resolve, reject) => {
+                                    const newSock = new net.Socket()
+                                    netSockets.push(newSock)
+                                    const id = pxt.U.guidGen()
+                                    newSock.on('error', err => {
+                                        if (ws)
+                                            ws.send(JSON.stringify({ op: "error", result: { socket: id, error: err.message } }))
+                                    })
+                                    newSock.connect(msg.arg.port, msg.arg.host, () => {
+                                        openSockets[id] = newSock
+                                        resolve({ socket: id })
+                                    })
+                                    newSock.on('data', d => {
+                                        if (ws)
+                                            ws.send(JSON.stringify({ op: "data", result: { socket: id, data: d.toString("base64"), encoding: "base64" } }))
+                                    })
+                                    newSock.on('close', () => {
+                                        if (ws)
+                                            ws.send(JSON.stringify({ op: "close", result: { socket: id } }))
+                                    })
+                                })
+
+                            case "send":
+                                sock.write(new Buffer(msg.arg.data, msg.arg.encoding || "utf8"))
+                                return {}
+                            default: // unknown message
+                                pxt.log(`unknown tcp message ${msg.op}`)
+                                return null;
+                        }
+                    })
+                    .done(resp => {
+                        if (!ws) return;
+                        pxt.debug(`hid: resp ${objToString(resp)}`)
+                        ws.send(JSON.stringify({
+                            op: msg.op,
+                            id: msg.id,
+                            result: resp
+                        }))
+                    }, error => {
+                        pxt.log(`hid: error  ${error.message}`)
+                        if (!ws) return;
+                        ws.send(JSON.stringify({
+                            result: {
+                                errorMessage: error.message || "Error",
+                                errorStackTrace: error.stack,
+                            },
+                            op: msg.op,
+                            id: msg.id
+                        }))
+                    })
+            } catch (e) {
+                console.log("ws tcp error", e.stack)
+            }
+        });
+        function closeAll() {
+            console.log('ws tcp connection closed')
+            ws = null;
+            for (let s of netSockets) {
+                try {
+                    s.end()
+                } catch (e) { }
+            }
+        }
+        ws.on('close', closeAll);
+        ws.on('error', closeAll);
+    }
+
+    function startDebug(request: http.IncomingMessage, socket: WebSocket, body: any) {
         let ws = new WebSocket(request, socket, body);
         let dapjs: any
 
@@ -562,30 +696,6 @@ function initSocketServer(wsPort: number, hostname: string) {
         })
     }
 
-    function startElectronChannel(request: any, socket: any, body: any) {
-        electronSocket = new WebSocket(request, socket, body);
-        electronSocket.onmessage = function (event: any) {
-            let messageInfo = JSON.parse(event.data) as ElectronMessage;
-
-            if (messageInfo.type === "ready") {
-                webappReady = true;
-                electronPendingMessages.forEach((m) => {
-                    sendElectronMessage(m);
-                });
-            } else if (electronHandlers[messageInfo.type]) {
-                electronHandlers[messageInfo.type](messageInfo.args);
-            }
-        };
-        electronSocket.onclose = function (event: any) {
-            console.log('Electron socket connection closed')
-            electronSocket = null;
-        };
-        electronSocket.onerror = function () {
-            console.log('Electron socket connection closed')
-            electronSocket = null;
-        };
-    }
-
     let wsserver = http.createServer();
     wsserver.on('upgrade', function (request: http.IncomingMessage, socket: WebSocket, body: any) {
         try {
@@ -597,9 +707,12 @@ function initSocketServer(wsPort: number, hostname: string) {
                     startDebug(request, socket, body);
                 else if (request.url == "/" + serveOptions.localToken + "/hid")
                     startHID(request, socket, body);
-                else if (request.url == "/" + serveOptions.localToken + "/electron")
-                    startElectronChannel(request, socket, body);
-                else console.log('refused connection at ' + request.url);
+                else if (request.url == "/" + serveOptions.localToken + "/tcp")
+                    startTCP(request, socket, body);
+                else {
+                    console.log('refused connection at ' + request.url);
+                    socket.close(403);
+                }
             }
         } catch (e) {
             console.log('upgrade failed...')
@@ -633,32 +746,15 @@ function initSerialMonitor() {
     })
 }
 
-export interface ElectronMessage {
-    type: string;
-    args?: any
-}
-export interface ElectronHandler { (args?: any): void }
-
 export interface ServeOptions {
     localToken: string;
     autoStart: boolean;
     packaged?: boolean;
-    electron?: boolean;
     browser?: string;
-    electronHandlers?: pxt.Map<ElectronHandler>;
     port?: number;
     hostname?: string;
     wsPort?: number;
     serial?: boolean;
-}
-
-export function sendElectronMessage(message: ElectronMessage) {
-    if (!webappReady) {
-        electronPendingMessages.push(message);
-        return;
-    }
-
-    electronSocket.send(JSON.stringify(message));
 }
 
 // can use http://localhost:3232/streams/nnngzlzxslfu for testing
@@ -730,7 +826,31 @@ function readMd(pathname: string): string {
     return `# Not found ${pathname}\nChecked:\n` + [docsDir].concat(dirs).concat(nodeutil.lastResolveMdDirs).map(s => "* ``" + s + "``\n").join("")
 }
 
-let serveOptions: ServeOptions;
+function resolveTOC(pathname: string): pxt.TOCMenuEntry[] {
+    // find summary.md
+    let summarydir = pathname.replace(/^\//, '');
+    let presummarydir = "";
+    while (summarydir !== presummarydir) {
+        const summaryf = path.join(summarydir, "SUMMARY");
+        // find "closest summary"
+        const summaryMd = nodeutil.resolveMd(root, summaryf)
+        if (summaryMd) {
+            try {
+                return pxt.docs.buildTOC(summaryMd);
+            } catch (e) {
+                pxt.log(`invalid ${summaryf} format - ${e.message}`)
+                pxt.log(e.stack);
+            }
+            break;
+        }
+        presummarydir = summarydir;
+        summarydir = path.dirname(summarydir);
+    }
+    // not found
+    pxt.log(`SUMMARY.md not found`)
+    return undefined;
+}
+
 export function serveAsync(options: ServeOptions) {
     serveOptions = options;
     if (!serveOptions.port) serveOptions.port = 3232;
@@ -740,9 +860,6 @@ export function serveAsync(options: ServeOptions) {
     const wsServerPromise = initSocketServer(serveOptions.wsPort, serveOptions.hostname);
     if (serveOptions.serial)
         initSerialMonitor();
-    if (serveOptions.electronHandlers) {
-        electronHandlers = serveOptions.electronHandlers;
-    }
 
     const server = http.createServer((req, res) => {
         const error = (code: number, msg: string = null) => {
@@ -825,6 +942,19 @@ export function serveAsync(options: ServeOptions) {
                 .then(exists => exists ? sendFile(name) : error(404));
         }
 
+        if (elts[0] == "assets") {
+            if (/^[a-z0-9\-_]/.test(elts[1]) && !/[\/\\]/.test(elts[1]) && !/^[.]/.test(elts[2])) {
+                let filename = path.join(userProjectsDir, elts[1], "assets", elts[2])
+                if (nodeutil.fileExistsSync(filename)) {
+                    return sendFile(filename)
+                } else {
+                    return error(404, "Asset not found")
+                }
+            } else {
+                return error(400, "Invalid asset path")
+            }
+        }
+
         if (options.packaged) {
             let filename = path.resolve(path.join(packagedDir, pathname))
             if (nodeutil.fileExistsSync(filename)) {
@@ -852,12 +982,13 @@ export function serveAsync(options: ServeOptions) {
             return
         }
 
-        if (pathname == "/--docs") {
+        if (/\/-[-]*docs.*$/.test(pathname)) {
             sendFile(path.join(publicDir, 'docs.html'));
             return
         }
 
         if (pathname == "/--codeembed") {
+            // http://localhost:3232/--codeembed#pub:20467-26471-70207-51013
             sendFile(path.join(publicDir, 'codeembed.html'));
             return
         }
@@ -905,6 +1036,22 @@ export function serveAsync(options: ServeOptions) {
             }
         }
 
+        if (/simulator\.html/.test(pathname)) {
+            // Special handling for missing simulator: redirect to the live sim
+            res.writeHead(302, { location: `https://trg-${pxt.appTarget.id}.userpxt.io/---simulator` });
+            res.end();
+            return;
+        }
+
+        // redirect
+        let redirectFile = path.join(docsDir, pathname + "-ref.json");
+        if (nodeutil.fileExistsSync(redirectFile)) {
+            const redir = nodeutil.readJson(redirectFile);
+            res.writeHead(301, { location: redir["redirect"] })
+            res.end()
+            return;
+        }
+
         let webFile = path.join(docsDir, pathname)
         if (!nodeutil.fileExistsSync(webFile)) {
             if (nodeutil.fileExistsSync(webFile + ".html")) {
@@ -923,13 +1070,17 @@ export function serveAsync(options: ServeOptions) {
                 sendFile(webFile)
             }
         } else {
-            let md = readMd(pathname)
-            let html = pxt.docs.renderMarkdown({
+            const m = /^\/(v\d+)(.*)/.exec(pathname);
+            if (m) pathname = m[2];
+            const md = readMd(pathname);
+            const mdopts = <pxt.docs.RenderOptions>{
                 template: expandDocFileTemplate("docs.html"),
                 markdown: md,
                 theme: pxt.appTarget.appTheme,
-                filepath: pathname
-            })
+                filepath: pathname,
+                TOC: resolveTOC(pathname)
+            };
+            let html = pxt.docs.renderMarkdown(mdopts)
             sendHtml(html, U.startsWith(md, "# Not found") ? 404 : 200)
         }
 
@@ -940,7 +1091,9 @@ export function serveAsync(options: ServeOptions) {
     const serverjs = path.resolve(path.join(root, 'built', 'server.js'))
     if (nodeutil.fileExistsSync(serverjs)) {
         console.log('loading ' + serverjs)
+        /* tslint:disable:non-literal-require */
         require(serverjs);
+        /* tslint:disable:non-literal-require */
     }
 
     const serverPromise = new Promise<void>((resolve, reject) => {
@@ -950,7 +1103,9 @@ export function serveAsync(options: ServeOptions) {
 
     return Promise.all([wsServerPromise, serverPromise])
         .then(() => {
+            /* tslint:disable:no-http-string */
             const start = `http://${serveOptions.hostname}:${serveOptions.port}/#local_token=${options.localToken}&wsport=${serveOptions.wsPort}`;
+            /* tslint:enable:no-http-string */
             console.log(`---------------------------------------------`);
             console.log(``);
             console.log(`To launch the editor, open this URL:`);

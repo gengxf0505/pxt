@@ -1,6 +1,7 @@
 /* Import all components */
 @import 'themes/default/globals/site.variables';
 @import 'themes/pxt/globals/site.variables';
+@import 'spriteeditor.less';
 
 /* Reference import */
 @import (reference) "semantic.less";
@@ -48,7 +49,8 @@
 
 /* Monaco Editor Main tokens */
 .monaco-editor .highlight-statement {
-    background-color: #FF8B27;
+    background-color: #b8b8fd;
+    color: black !important;
 }
 
 /* Monaco Toolbox */
@@ -85,6 +87,11 @@
     user-select: none;
     color: white;
     font-size: 15px;
+}
+
+.monacoFlyoutLabelText {
+    font-family: @pageFont;
+    vertical-align: middle;
 }
 
 .monacoFlyoutHeading {
@@ -140,15 +147,17 @@
     left: 100%;
 }
 
+.monacoDraggableBlock span {
+    word-wrap: break-word;
+}
+
 .monacoDraggableBlock span.sig {
     opacity: 0.6;
     margin-left: 10px;
-    word-wrap: break-word;
 }
 
 .monacoDraggableBlock span.sigPrefix {
     opacity: 0.6;
-    word-wrap: break-word;
 }
 
 .monacoDraggableBlock span.docs {
@@ -164,9 +173,62 @@
 }
 
 /*******************************
+    (Do not override)
+*******************************/
+
+/* Monaco Editor Errors */
+.monaco-editor .error-view-zone {
+    font-family: Monaco, Menlo, "Ubuntu Mono", Consolas, source-code-pro, monospace;
+    width: initial !important;
+}
+.monaco-editor.vs-dark .error-view-zone {
+    color:white;
+}
+.monaco-editor .error-view-zone .marker-widget {
+    border-radius: 2px !important;
+    padding-left: 10px !important;
+    padding-right: 20px !important;
+}
+
+/* Fix for monaco editor Signature bug in Safari */
+.monaco-editor .parameter-hints-widget {
+    flex-direction: row !important;
+}
+
+.line-numbers {
+    display:none;
+}
+
+.monacoToolboxDiv {
+    position: absolute;
+    display: inline-block;
+    overflow-x: visible;
+    overflow-y: auto;
+    vertical-align: top;
+}
+.monacoToolboxDiv.hide {
+    display: none;
+}
+
+#monacoEditorInner {
+    position: relative !important;
+    display: inline-block;
+}
+
+/*******************************
         Monaco Accessibility
 *******************************/
 
 .monacoDraggableBlock:focus {
     outline: none; /* We highlight the focused item in the toolbox, no need to outline */
+}
+
+.monaco-field-editor-frame {
+    padding: 4px;
+    position: relative;
+}
+
+.pxt-view-zone {
+    width: 100%;
+    z-index: calc(@monacoFlyoutZIndex - 1);
 }

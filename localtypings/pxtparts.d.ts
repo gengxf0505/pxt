@@ -3,16 +3,25 @@ declare namespace pxsim {
     interface PinBlockDefinition {
         x: number,
         y: number,
-        labelPosition: "above" | "below";
+        labelPosition?: "above" | "below";
         labels: string[]
     }
-    interface LEDDefinition {
+    interface BoxDefinition {
         x: number;
         y: number;
         w?: number;
         h?: number;
+    }
+    interface LEDDefinition extends BoxDefinition {
         color: string;
         label: string;
+    }
+    interface TouchPadDefinition extends BoxDefinition {
+        label: string; // pin name
+    }
+    interface ButtonDefinition extends BoxDefinition {
+        index?: number; // by button index
+        label?: string; // pin name
     }
     interface BoardImageDefinition {
         image: string,
@@ -21,7 +30,11 @@ declare namespace pxsim {
         height: number,
         pinDist: number,
         pinBlocks: PinBlockDefinition[],
-        leds?: LEDDefinition[]
+        buttons?: ButtonDefinition[];
+        touchPads?: TouchPadDefinition[];
+        leds?: LEDDefinition[];
+        reset?: BoxDefinition;
+        useCrocClips?: boolean;
     }
     interface BoardDefinition {
         id?: string, // optional board id (set to the package id, multiboard only)
@@ -31,10 +44,11 @@ declare namespace pxsim {
         gpioPinBlocks?: string[][], // not used
         gpioPinMap: { [pin: string]: string },
         groundPins: string[],
-        threeVoltPins: string[],
+        threeVoltPins?: string[],
+        fiveVoltPins?: string[],
         attachPowerOnRight?: boolean,
-        onboardComponents?: string[]
-        useCrocClips?: boolean,
+        onboardComponents?: string[],
+        pinStyles?: { [pin: string]: PinStyle },
         marginWhenBreadboarding?: [number, number, number, number],
         spiPins?: {
             MOSI: string,
@@ -45,7 +59,10 @@ declare namespace pxsim {
             SDA: string,
             SCL: string,
         },
-        analogInPins?: string[] //TODO: implement allocation
+        bootloaderBaudSwitchInfo?: {
+            vid: string,
+            pid: string,
+        };
     }
     // ---- part definition
     export interface PartDefinition {
@@ -53,13 +70,15 @@ declare namespace pxsim {
         simulationBehavior?: string,
         // total number of power + GPIO + other pins
         numberOfPins: number,
-        // visual description or built-in visual name 
+        // visual description or built-in visual name
         visual: PartVisualDefinition,
         // metadata for each pin
         pinDefinitions: PartPinDefinition[],
         // description of how part is instantiated
-        instantiation: PartSingletonDefinition | PartFunctionDefinition,
-        // list describing number and order of assembly instruction steps; the length is how many steps this part needs 
+        instantiation?: PartSingletonDefinition | PartFunctionDefinition,
+        // description of how part is instantiated
+        instantiations?: (PartSingletonDefinition | PartFunctionDefinition)[],
+        // list describing number and order of assembly instruction steps; the length is how many steps this part needs
         assembly: AssemblyStepDefinition[],
     }
     export interface PartVisualDefinition {
@@ -75,12 +94,12 @@ declare namespace pxsim {
         // the exact centers of each pin; must have as many locations as the "numberOfPins" property
         pinLocations: XY[],
     }
-    export type XY = {x: number, y: number}
+    export type XY = { x: number, y: number }
     export interface PartPinDefinition {
         target: UninstantiatedPinTarget, // e.g.: "ground", "MISO", etc.; see PinType
         style: PinStyle, // e.g.: "male", "female", "solder"; see PinStyle
         orientation: PinOrientation, // e.g.: "+X", "-Z", etc.; see PinOrientation
-        colorGroup?: number, // if set, the allocator while try to give pins for this part in the same group the same color 
+        colorGroup?: number, // if set, the allocator while try to give pins for this part in the same group the same color
     }
     export type UninstantiatedPinTarget = PinTarget | PinInstantiationIdx;
     export type PinTarget = string;
@@ -116,11 +135,11 @@ declare namespace pxsim {
         argumentRoles: ArgumentRole[],
     }
     export interface ArgumentRole {
-        // argument is to be passed to the part during initialization. 
-        //  E.g. NeoPixel uses this to know if the strip is "RGB" or "RGBW" style 
+        // argument is to be passed to the part during initialization.
+        //  E.g. NeoPixel uses this to know if the strip is "RGB" or "RGBW" style
         partParameter?: string;
-        // argument is a "DigitalPin" enum value that is used as a pin value for this part 
-        //  E.g. neopixel.create(..)'s first argument is the pin which the NeoPixel is connected to 
+        // argument is a "DigitalPin" enum value that is used as a pin value for this part
+        //  E.g. neopixel.create(..)'s first argument is the pin which the NeoPixel is connected to
         pinInstantiationIdx?: number;
     }
     export interface PinInstantiationIdx {
@@ -129,7 +148,7 @@ declare namespace pxsim {
     // describes a single step for the assembly instructions
     export interface AssemblyStepDefinition {
         part?: boolean, // if true, the part itself should be assembled during this step
-        pinIndices?: number[], // the indices (ranging from 0 to "numberOfPins") of pins that should be wired for this step 
+        pinIndices?: number[], // the indices (ranging from 0 to "numberOfPins") of pins that should be wired for this step
     }
 
     export interface SimulatorMessage {
@@ -139,6 +158,8 @@ declare namespace pxsim {
     // type=debugger
     export interface DebuggerMessage extends SimulatorMessage {
         subtype: string;
+        seq?: number;
+        req_seq?: number;
     }
 
     // subtype=config
@@ -186,5 +207,12 @@ declare namespace pxsim {
         [name: string]: any;
     }
 
+    export interface VariablesRequestMessage extends DebuggerMessage {
+        variablesReference: string;
+        fields?: string[]
+    }
 
+    export interface VariablesMessage extends DebuggerMessage {
+        variables: Variables;
+    }
 }

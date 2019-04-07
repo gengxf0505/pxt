@@ -1,3 +1,9 @@
+/// <reference path="../localtypings/blockly.d.ts" />
+
+declare namespace Blockly.Xml {
+    function domToBlock(xml: Element, workspace: Blockly.Workspace): Blockly.Block;
+}
+
 namespace pxt.blocks {
     export interface ComposableMutation {
         // Set to save mutations. Should return an XML element
@@ -25,7 +31,7 @@ namespace pxt.blocks {
         }
     }
 
-    export function initVariableArgsBlock(b: B.Block, handlerArgs: pxt.blocks.HandlerArg[]) {
+    export function initVariableArgsBlock(b: Blockly.Block, handlerArgs: pxt.blocks.HandlerArg[]) {
         let currentlyVisible = 0;
         let actuallyVisible = 0;
 
@@ -69,7 +75,8 @@ namespace pxt.blocks {
                 el.setAttribute("numArgs", currentlyVisible.toString());
 
                 for (let j = 0; j < currentlyVisible; j++) {
-                    let varName = b.getFieldValue("HANDLER_" + handlerArgs[j].name);
+                    const varField = b.getField("HANDLER_" + handlerArgs[j].name);
+                    let varName = varField && varField.getText();
                     el.setAttribute("arg" + j, varName);
                 }
 
@@ -82,8 +89,11 @@ namespace pxt.blocks {
                 updateShape();
 
                 for (let j = 0; j < currentlyVisible; j++) {
-                    let varName = saved.getAttribute("arg" + j);
-                    b.setFieldValue(varName, "HANDLER_" + handlerArgs[j].name);
+                    const varName = saved.getAttribute("arg" + j);
+                    const fieldName = "HANDLER_" + handlerArgs[j].name;
+                    if (b.getField(fieldName)) {
+                        setVarFieldValue(b, fieldName, varName);
+                    }
                 }
             }
         });
@@ -97,39 +107,30 @@ namespace pxt.blocks {
         }
     }
 
-    export function initExpandableBlock(b: Blockly.Block, def: pxtc.ParsedBlockDef, comp: BlockCompileInfo, toggle: boolean, addInputs: () => void) {
+    export function initExpandableBlock(info: pxtc.BlocksInfo, b: Blockly.Block, def: pxtc.ParsedBlockDef, comp: BlockCompileInfo, toggle: boolean, addInputs: () => void) {
         // Add numbers before input names to prevent clashes with the ones added
         // by BlocklyLoader. The number makes it an invalid JS identifier
         const buttonAddName = "0_add_button";
         const buttonRemName = "0_rem_button";
-        const attributeName = "_expanded";
-        const inputsAttributeName = "_input_init";
+        const numVisibleAttr = "_expanded";
+        const inputInitAttr = "_input_init";
 
         const optionNames = def.parameters.map(p => p.name);
         const totalOptions = def.parameters.length;
         const buttonDelta = toggle ? totalOptions : 1;
 
-        // These two variables are the "state" of the mutation
-        let visibleOptions = 0;
-        let inputsInitialized = false;
+        const state = new MutationState(b as MutatingBlock);
+        state.setEventsEnabled(false);
+        state.setValue(numVisibleAttr, 0);
+        state.setValue(inputInitAttr, false);
+        state.setEventsEnabled(true);
+
+        let addShown = false;
+        let remShown = false;
 
         Blockly.Extensions.apply('inline-svgs', b, false);
+
         addPlusButton();
-
-        const onFirstRender = () => {
-            if (b.rendered) {
-                updateShape(0, undefined, true);
-
-                // We don't need anything once the dom is initialized, so clean up
-                b.workspace.removeChangeListener(onFirstRender);
-            }
-        };
-
-        // Blockly only lets you hide an input once it is rendered, so we can't
-        // hide the inputs in init() or domToMutation(). This will get called
-        // whenever a change is made to the workspace (including after the first
-        // block render) and then remove itself
-        (b as any).setOnChange(onFirstRender);
 
         appendMutation(b, {
             mutationToDom: (el: Element) => {
@@ -137,42 +138,61 @@ namespace pxt.blocks {
                 // is because it's possible for the block to get into a state where all inputs are
                 // initialized but they aren't visible (i.e. the user hit the - button). Blockly
                 // gets upset if a block has a different number of inputs when it is saved and restored.
-                el.setAttribute(attributeName, visibleOptions.toString());
-                el.setAttribute(inputsAttributeName, inputsInitialized.toString());
+                el.setAttribute(numVisibleAttr, state.getString(numVisibleAttr));
+                el.setAttribute(inputInitAttr, state.getString(inputInitAttr));
                 return el;
             },
             domToMutation: (saved: Element) => {
-                if (saved.hasAttribute(inputsAttributeName) && saved.getAttribute(inputsAttributeName) == "true" && !inputsInitialized) {
+                state.setEventsEnabled(false);
+                if (saved.hasAttribute(inputInitAttr) && saved.getAttribute(inputInitAttr) == "true" && !state.getBoolean(inputInitAttr)) {
+                    state.setValue(inputInitAttr, true)
                     initOptionalInputs();
                 }
 
-                if (saved.hasAttribute(attributeName)) {
-                    const val = parseInt(saved.getAttribute(attributeName));
+                if (saved.hasAttribute(numVisibleAttr)) {
+                    const val = parseInt(saved.getAttribute(numVisibleAttr));
                     if (!isNaN(val)) {
-                        if (inputsInitialized) {
-                            visibleOptions = addDelta(val);
+                        const delta = val - (state.getNumber(numVisibleAttr) || 0);
+                        if (state.getBoolean(inputInitAttr)) {
+                            if ((b as Blockly.BlockSvg).rendered) {
+                                updateShape(delta, true);
+                            }
+                            else {
+                                state.setValue(numVisibleAttr, addDelta(delta));
+                            }
                         }
                         else {
-                            updateShape(val, true);
+                            updateShape(delta, true);
                         }
-                        return;
                     }
                 }
+                state.setEventsEnabled(true);
             }
         });
+
+        // Blockly only lets you hide an input once it is rendered, so we can't
+        // hide the inputs in init() or domToMutation(). This will get executed after
+        // the block is rendered
+        setTimeout(() => {
+            if ((b as Blockly.BlockSvg).rendered && !(b.workspace as Blockly.WorkspaceSvg).isDragging()) {
+                updateShape(0, undefined, true);
+                updateButtons();
+            }
+        }, 1);
 
         // Set skipRender to true if the block is still initializing. Otherwise
         // the inputs will render before their shadow blocks are created and
         // leave behind annoying artifacts
         function updateShape(delta: number, skipRender = false, force = false) {
             const newValue = addDelta(delta);
-            if (!force && !skipRender && newValue === visibleOptions) return;
+            if (!force && !skipRender && newValue === state.getNumber(numVisibleAttr)) return;
 
-            visibleOptions = newValue;
+            state.setValue(numVisibleAttr, newValue);
+            const visibleOptions = newValue;
 
-            if (!inputsInitialized && visibleOptions > 0) {
+            if (!state.getBoolean(inputInitAttr) && visibleOptions > 0) {
                 initOptionalInputs();
-                if (!b.rendered) {
+                if (!(b as Blockly.BlockSvg).rendered) {
                     return;
                 }
             }
@@ -181,34 +201,38 @@ namespace pxt.blocks {
             for (let i = 0; i < b.inputList.length; i++) {
                 const input = b.inputList[i];
                 if (Util.startsWith(input.name, optionalDummyInputPrefix)) {
-                    setInputVisible(input, optIndex < visibleOptions);
+                    // The behavior for dummy inputs (i.e. labels) is that whenever a parameter is revealed,
+                    // all earlier labels are made visible as well. If the parameter is the last one in the
+                    // block then all labels are made visible
+                    setInputVisible(input, optIndex < visibleOptions || visibleOptions === totalOptions);
                 }
                 else if (Util.startsWith(input.name, optionalInputWithFieldPrefix) || optionNames.indexOf(input.name) !== -1) {
                     const visible = optIndex < visibleOptions;
                     setInputVisible(input, visible);
                     if (visible && input.connection && !(input.connection as any).isConnected() && !b.isInsertionMarker()) {
-                        // FIXME: Could probably be smarter here, right now this does not respect
-                        // any options passed to the child block. Need to factor that out of BlocklyLoader
                         const param = comp.definitionNameToParam[def.parameters[optIndex].name];
-                        const shadowId = param.shadowBlockId || shadowBlockForType(param.type);
-                        if (shadowId) {
-                            const nb = b.workspace.newBlock(shadowId);
-                            nb.setShadow(true);
+                        let shadow = createShadowValue(info, param);
 
-                            // Because this function is sometimes called before the block is
-                            // rendered, we need to guard these calls to initSvg and render
-                            if (nb.initSvg) nb.initSvg();
-                            input.connection.connect(nb.outputConnection);
-                            if (nb.render) nb.render();
+                        if (shadow.tagName.toLowerCase() === "value") {
+                            // Unwrap the block
+                            shadow = shadow.firstElementChild;
                         }
+
+                        Blockly.Events.disable();
+
+                        const nb = Blockly.Xml.domToBlock(shadow, b.workspace);
+                        if (nb) {
+                            input.connection.connect(nb.outputConnection);
+                        }
+
+                        Blockly.Events.enable();
                     }
                     ++optIndex;
                 }
             }
 
-            setButton(buttonAddName, visibleOptions !== totalOptions);
-            setButton(buttonRemName, visibleOptions !== 0);
-            if (!skipRender) b.render();
+            updateButtons();
+            if (!skipRender) (b as Blockly.BlockSvg).render();
         }
 
         function addButton(name: string, uri: string, alt: string, delta: number) {
@@ -216,51 +240,113 @@ namespace pxt.blocks {
             .appendField(new Blockly.FieldImage(uri, 24, 24, false, alt, () => updateShape(delta)))
         }
 
+        function updateButtons() {
+            const visibleOptions = state.getNumber(numVisibleAttr);
+            const showAdd = visibleOptions !== totalOptions;
+            const showRemove = visibleOptions !== 0;
+
+            if (!showAdd) {
+                addShown = false;
+                b.removeInput(buttonAddName, true);
+            }
+            if (!showRemove) {
+                remShown = false;
+                b.removeInput(buttonRemName, true);
+            }
+
+            if (showRemove && !remShown) {
+                if (addShown) {
+                    b.removeInput(buttonAddName, true);
+                    addMinusButton();
+                    addPlusButton();
+                }
+                else {
+                    addMinusButton();
+                }
+            }
+
+            if (showAdd && !addShown) {
+                addPlusButton();
+            }
+        }
+
         function addPlusButton() {
+            addShown = true;
             addButton(buttonAddName, (b as any).ADD_IMAGE_DATAURI, lf("Reveal optional arguments"), buttonDelta);
         }
 
         function addMinusButton() {
+            remShown = true;
             addButton(buttonRemName, (b as any).REMOVE_IMAGE_DATAURI, lf("Hide optional arguments"), -1 * buttonDelta);
         }
 
         function initOptionalInputs() {
-            inputsInitialized = true;
+            state.setValue(inputInitAttr, true);
             addInputs();
-            b.removeInput(buttonAddName);
-            addMinusButton();
-            addPlusButton();
+            updateButtons();
         }
 
         function addDelta(delta: number) {
-            return Math.min(Math.max(visibleOptions + delta, 0), totalOptions);
-        }
-
-        function setButton(name: string, visible: boolean) {
-            b.inputList.forEach(i => {
-                if (i.name === name) setInputVisible(i, visible);
-            });
+            return Math.min(Math.max(state.getNumber(numVisibleAttr) + delta, 0), totalOptions);
         }
 
         function setInputVisible(input: Blockly.Input, visible: boolean) {
             // If the block isn't rendered, Blockly will crash
-            if (b.rendered) {
-                input.setVisible(visible);
+            if ((b as Blockly.BlockSvg).rendered) {
+                let renderList = input.setVisible(visible);
+                renderList.forEach((block: Blockly.BlockSvg) => {
+                    block.render();
+                });
             }
         }
     }
 
-    function shadowBlockForType(type: string) {
-        switch (type) {
-            case "number": return "math_number";
-            case "boolean": return "logic_boolean"
-            case "string": return "text";
+    class MutationState {
+        private state: pxt.Map<string>;
+        private fireEvents = true;
+
+        constructor(public block: MutatingBlock, initState?: pxt.Map<string>) {
+            this.state = initState || {};
         }
 
-        if (isArrayType(type)) {
-            return "lists_create_with";
+        setValue(attr: string, value: boolean | number | string) {
+            if (this.fireEvents && this.block.mutationToDom) {
+                const oldMutation = this.block.mutationToDom();
+                this.state[attr] = value.toString();
+                const newMutation = this.block.mutationToDom();
+
+                Object.keys(this.state).forEach(key => {
+                    if (oldMutation.getAttribute(key) !== this.state[key]) {
+                        newMutation.setAttribute(key, this.state[key]);
+                    }
+                });
+
+                const oldText = Blockly.Xml.domToText(oldMutation);
+                const newText = Blockly.Xml.domToText(newMutation);
+
+                if (oldText != newText) {
+                    Blockly.Events.fire(new Blockly.Events.BlockChange(this.block, "mutation", null, oldText, newText));
+                }
+            }
+            else {
+                this.state[attr] = value.toString();
+            }
         }
 
-        return undefined;
+        getNumber(attr: string) {
+            return parseInt(this.state[attr]);
+        }
+
+        getBoolean(attr: string) {
+            return this.state[attr] != "false";
+        }
+
+        getString(attr: string) {
+            return this.state[attr];
+        }
+
+        setEventsEnabled(enabled: boolean) {
+            this.fireEvents = enabled;
+        }
     }
 }

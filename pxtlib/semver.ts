@@ -59,6 +59,15 @@ namespace pxt.semver {
     }
 
     export function tryParse(v: string): Version {
+        if ("*" === v) {
+            return {
+                major: Number.MAX_SAFE_INTEGER,
+                minor: Number.MAX_SAFE_INTEGER,
+                patch: Number.MAX_SAFE_INTEGER,
+                pre: [],
+                build: []
+            };
+        }
         if (/^v\d/i.test(v)) v = v.slice(1)
         let m = /^(\d+)\.(\d+)\.(\d+)(-([0-9a-zA-Z\-\.]+))?(\+([0-9a-zA-Z\-\.]+))?$/.exec(v)
         if (m)
@@ -70,6 +79,10 @@ namespace pxt.semver {
                 build: m[7] ? m[7].split(".") : []
             }
         return null
+    }
+
+    export function normalize(v: string): string {
+        return stringify(parse(v));
     }
 
     export function stringify(v: Version) {
@@ -93,6 +106,29 @@ namespace pxt.semver {
         if (!aa && !bb)
             return U.strcmp(a, b)
         else return cmp(aa, bb)
+    }
+
+    export function inRange(rng: string, v: Version): boolean {
+        let rngs = rng.split(' - ');
+        if (rngs.length != 2) return false;
+        let minInclusive = tryParse(rngs[0]);
+        let maxExclusive = tryParse(rngs[1]);
+        if (!minInclusive || !maxExclusive) return false;
+        if (!v) return true;
+        const lwr = cmp(minInclusive, v);
+        const hr = cmp(v, maxExclusive);
+        return lwr <= 0 && hr < 0;
+    }
+
+    /**
+     * Filters and sort tags from latest to oldest (semver wize)
+     * @param tags 
+     */
+    export function sortLatestTags(tags: string[]): string[] {
+        const v = tags.filter(tag => !!semver.tryParse(tag));
+        v.sort(strcmp);
+        v.reverse();
+        return v;
     }
 
     export function test() {
@@ -124,6 +160,12 @@ namespace pxt.semver {
                 else U.assert(x == 0)
             }
         }
-    }
 
+        const v = tryParse("1.2.3");
+        U.assert(inRange("0.1.2 - 2.2.3", v))
+        U.assert(inRange("1.2.3 - 2.2.3", v))
+        U.assert(!inRange("0.0.0 - 1.2.3", v))
+        U.assert(!inRange("1.2.4 - 4.2.3", v))
+        U.assert(!inRange("0.0.0 - 0.0.1", v))
+    }
 }

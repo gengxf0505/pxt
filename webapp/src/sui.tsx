@@ -1,7 +1,12 @@
 import * as React from "react";
 import * as ReactDOM from "react-dom";
+import * as ReactModal from 'react-modal';
+import * as ReactTooltip from 'react-tooltip';
+
 import * as data from "./data";
 import * as core from "./core";
+
+export const appElement = document.getElementById('content');
 
 export interface UiProps {
     icon?: string;
@@ -9,7 +14,7 @@ export interface UiProps {
     text?: string;
     textClass?: string;
     children?: any;
-    class?: string;
+    className?: string;
     role?: string;
     title?: string;
     ariaLabel?: string;
@@ -17,41 +22,27 @@ export interface UiProps {
     rightIcon?: boolean;
 }
 
-export interface WithPopupProps extends UiProps {
-    popup?: string;
-}
-
-export interface DropdownProps extends WithPopupProps {
-    tabIndex?: number;
-    value?: string;
-    title?: string;
-    onChange?: (v: string) => void;
-}
+export type SIZES = 'mini' | 'tiny' | 'small' | 'medium' | 'large' | 'big' | 'huge' | 'massive';
 
 export interface SidebarProps extends UiProps {
     visible?: boolean;
 }
 
 export function cx(classes: string[]): string {
-    return classes.filter((c) => c && c.length !== 0 && c.trim() != '').join(' ');
+    return classes.filter((c) => !!c && c.trim() != '').join(' ');
 }
 
 function genericClassName(cls: string, props: UiProps, ignoreIcon: boolean = false): string {
-    return `${cls} ${ignoreIcon ? '' : props.icon && props.text ? 'icon icon-and-text' : props.icon ? 'icon' : ""} ${props.class || ""}`;
+    return `${cls} ${ignoreIcon ? '' : props.icon && props.text ? 'icon icon-and-text' : props.icon ? 'icon' : ""} ${props.className || ""}`;
 }
 
 function genericContent(props: UiProps) {
     let retVal = [
-        props.icon ? (<Icon key='iconkey' icon={props.icon + (props.text ? " icon-and-text " : "") + (props.iconClass ? " " + props.iconClass : '') } />) : null,
-        props.text ? (<span key='textkey' className={'ui text' + (props.textClass ? ' ' + props.textClass : '') }>{props.text}</span>) : null,
+        props.icon ? (<Icon key='iconkey' icon={props.icon + (props.text ? " icon-and-text " : "") + (props.iconClass ? " " + props.iconClass : '')} />) : null,
+        props.text ? (<span key='textkey' className={'ui text' + (props.textClass ? ' ' + props.textClass : '')}>{props.text}</span>) : null,
     ]
     if (props.icon && props.rightIcon) retVal = retVal.reverse();
     return retVal;
-}
-
-export function popupWindow(url: string, title: string, width: number, height: number) {
-    return window.open(url, title, `resizable=no, copyhistory=no, ` +
-        `width=${width}, height=${height}, top=${(screen.height / 2) - (height / 2)}, left=${(screen.width / 2) - (width / 2)}`);
 }
 
 function removeClass(el: HTMLElement, cls: string) {
@@ -60,154 +51,311 @@ function removeClass(el: HTMLElement, cls: string) {
 }
 
 export function fireClickOnEnter(e: React.KeyboardEvent<HTMLElement>): void {
-    let charCode = (typeof e.which == "number") ? e.which : e.keyCode
+    const charCode = core.keyCodeFromEvent(e);
     if (charCode === core.ENTER_KEY || charCode === core.SPACE_KEY) {
         e.preventDefault();
         (e.currentTarget as HTMLElement).click();
     }
 }
 
-export class UiElement<T extends WithPopupProps> extends data.Component<T, {}> {
-    popup() {
-        if (this.props.popup) {
-            let ch = this.child("")
-            ch.popup({
-                content: this.props.popup
-            });
-            if (!ch.data("hasPopupHide")) {
-                ch.data("hasPopupHide", "yes")
-                ch.on("click", () => {
-                    ch.popup("hide")
-                })
-            }
-        }
-    }
+export class UIElement<T, S> extends data.Component<T, S> {
+}
 
-    componentDidMount() {
-        this.popup()
-    }
+export class StatelessUIElement<T> extends data.PureComponent<T, {}> {
+}
 
-    componentDidUpdate() {
-        this.popup()
-    }
+///////////////////////////////////////////////////////////
+////////////           Dropdowns              /////////////
+///////////////////////////////////////////////////////////
+
+export interface DropdownProps extends UiProps {
+    disabled?: boolean;
+    tabIndex?: number;
+    value?: string;
+    title?: string;
+    onChange?: (v: string) => void;
 
 }
 
-export class DropdownMenuItem extends UiElement<DropdownProps> {
-    private isOpened = false
-    private preventHide = false
+export interface DropdownState {
+    open?: boolean;
+    focus?: boolean;
+}
 
-    private menuItemKeyDown = (e: KeyboardEvent) => {
-        let charCode = (typeof e.which == "number") ? e.which : e.keyCode
-        if (charCode === core.TAB_KEY) {
-            this.close()
-        } else if (charCode === core.ENTER_KEY || charCode === core.SPACE_KEY) {
-            /* give the focus back to the dropdown menu, so if the menuitem opens a modal,
-               the focus will not be reset once the modal is closed. */
-            this.child("").focus()
+export class DropdownMenu extends UIElement<DropdownProps, DropdownState> {
+
+    show() {
+        this.setState({ open: true, focus: true });
+    }
+
+    hide() {
+        this.setState({ open: false });
+    }
+
+    toggle() {
+        if (this.state.open) {
+            this.hide();
+        } else {
+            this.show();
         }
     }
 
-    private dropDownKeyDown = (e: JQueryKeyEventObject) => {
-        let charCode = (typeof e.which == "number") ? e.which : e.keyCode
-        if (charCode === core.ENTER_KEY || charCode === core.SPACE_KEY) {
-            if (this.isOpened) {
-                this.child("").dropdown("hide")
-            } else {
-                this.child("").dropdown("show")
+    private focus(el: HTMLElement) {
+        this.setActive(el);
+        el.focus();
+    }
+
+    private blur(el: HTMLElement) {
+        if (this.isActive(el)) {
+            el.classList.remove("active");
+        }
+    }
+
+    private setActive(el: HTMLElement) {
+        if (!this.isActive(el)) {
+            el.classList.add("active");
+        }
+    }
+
+    private isActive(el: HTMLElement) {
+        return el && el.classList.contains("active");
+    }
+
+    getChildren() {
+        const menu = this.refs["menu"] as HTMLElement;
+        const children = [];
+        for (let i = 0; i < menu.childNodes.length; i++) {
+            const child = menu.childNodes[i] as HTMLElement;
+            // Remove separators
+            if (child.classList.contains("divider")) continue;
+            // Check if item is intended for mobile only views
+            if (child.classList.contains("mobile") && !pxt.BrowserUtils.isMobile()) continue;
+            children.push(child);
+        }
+        return children;
+    }
+
+    isChildFocused() {
+        const children = this.getChildren();
+        for (let i = 0; i < children.length; i++) {
+            if (document.activeElement === children[i]) return true;
+        }
+        return false;
+    }
+
+    private navigateToNextElement = (e: KeyboardEvent, prev: HTMLElement, next: HTMLElement) => {
+        const dropdown = this.refs["dropdown"] as HTMLElement;
+        const charCode = core.keyCodeFromEvent(e);
+        const current = e.currentTarget as HTMLElement;
+        if (charCode === 40 /* Down arrow */) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (next) {
+                this.focus(next);
             }
+        } else if (charCode === 38 /* Up arrow */) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (prev) {
+                this.focus(prev);
+            } else {
+                // Prev is undefined, go to dropdown
+                dropdown.focus();
+                this.setState({ open: false });
+            }
+        } else if (charCode === core.SPACE_KEY || charCode === core.ENTER_KEY) {
+            // Trigger click
+            e.preventDefault();
+            e.stopPropagation();
+            current.click();
         }
-    }
-
-    private close() {
-        this.preventHide = false
-        this.child("").dropdown("hide")
     }
 
     componentDidMount() {
-        this.popup()
-        let dropdowmtag = this.child("")
-        dropdowmtag.on("keydown", this.dropDownKeyDown as any)
-        dropdowmtag.dropdown({
-            action: (text: string, value: any, element: JQuery) => {
-                this.close()
+        const children = this.getChildren();
+        for (let i = 0; i < children.length; i++) {
+            const prev = i > 0 ? children[i - 1] as HTMLElement : undefined;
+            const child = children[i] as HTMLElement;
+            const next = i < children.length ? children[i + 1] as HTMLElement : undefined;
 
-                // When we use the keyboard, it is not an HTMLElement that we receive, but a JQuery.
-                if (typeof element.get === "function") {
-                    if (element.get(0).tagName.toLowerCase() === 'a') {
-                        window.open((element.get(0) as HTMLLinkElement).href, '_blank')
+            child.addEventListener('keydown', (e) => {
+                this.navigateToNextElement(e, prev, next);
+            })
+
+            child.addEventListener('focus', (e: FocusEvent) => {
+                this.setActive(child);
+            })
+            child.addEventListener('blur', (e: FocusEvent) => {
+                this.blur(child);
+            })
+
+            if (i == children.length - 1) {
+                // set tab on last child to clear focus
+                child.addEventListener('keydown', (e) => {
+                    const charCode = core.keyCodeFromEvent(e);
+                    if (!e.shiftKey && charCode === core.TAB_KEY) {
+                        this.hide();
                     }
-                }
-            },
-            fullTextSearch: true,
-            onChange: (v: string, text: string, item: JQuery) => {
-                this.preventHide = true
-                item.get(0).focus()
-
-                if (this.props.onChange && v != this.props.value) {
-                    this.props.onChange(v)
-                }
-            },
-            onShow: () => {
-                this.isOpened = true
-                this.forceUpdate()
-
-                let menuItems = this.child(".item")
-                menuItems.each((index: number, elem: HTMLElement) => {
-                    elem.onkeydown = this.menuItemKeyDown
                 })
-            },
-            onHide: () => {
-                if (this.preventHide) {
-                    this.preventHide = false
-                    return false
-                }
-
-                this.isOpened = false
-                this.forceUpdate()
-                return true
             }
-        });
+        }
     }
 
-    componentDidUpdate() {
-        this.child("").dropdown("refresh")
-        this.popup()
+    componentDidUpdate(prevProps: DropdownProps, prevState: DropdownState) {
+        // Remove active from all menu items on any update
+        const children = this.getChildren();
+        for (let i = 0; i < children.length; i++) {
+            const child = children[i] as HTMLElement;
+            // On allow tabbing to valid child nodes (ie: no separators or mobile only items)
+            child.tabIndex = this.state.open ? 0 : -1;
+        }
+
+        // Check if dropdown width exceeds the bounds, add the left class to the menu
+        if (prevState.open != this.state.open && this.state.open) {
+            const dropdown = this.refs["dropdown"] as HTMLElement;
+            const menu = this.refs["menu"] as HTMLElement;
+            if (dropdown.offsetLeft + menu.offsetWidth > window.innerWidth) {
+                // Add left class to the menu
+                pxsim.U.addClass(menu, 'left');
+            }
+        }
+
+        if (!prevState.focus && this.state.focus) {
+            // Dropdown focused
+        } else if (prevState.focus && !this.state.focus) {
+            // Dropdown blurred
+            if (!this.isMouseDown) {
+                this.hide()
+            }
+        }
+
+        if (!prevState.open && this.state.open) {
+            // Dropdown opened
+            document.addEventListener('keydown', this.closeOnEscape);
+        } else if (prevState.open && !this.state.open) {
+            // Dropdown closed
+            document.removeEventListener('keydown', this.closeOnEscape);
+            this.handleClose()
+        }
+        if (this.focusFirst && children.length > 0) {
+            // Focus the first child
+            this.focus(children[0]);
+            this.focusFirst = false;
+        }
+    }
+
+    private closeOnEscape = (e: KeyboardEvent) => {
+        const charCode = core.keyCodeFromEvent(e);
+        if (charCode === core.ESC_KEY) {
+            e.preventDefault();
+            const dropdown = this.refs["dropdown"] as HTMLElement;
+            dropdown.focus();
+            // Reset the focus handlers
+            this.isMouseDown = true;
+            this.hide();
+        }
+    }
+
+    private handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+        this.toggle();
+        e.stopPropagation()
+    }
+
+    private handleClose = () => {
+        this.isMouseDown = false
+        const hasFocus = document.activeElement === this.refs['dropdown'];
+        this.setState({ focus: hasFocus })
+    }
+
+    private isMouseDown: boolean;
+    private handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+        this.isMouseDown = true
+        document.addEventListener(pxsim.pointerEvents.up, this.handleDocumentMouseUp)
+    }
+
+    private handleDocumentMouseUp = (e: MouseEvent) => {
+        this.isMouseDown = false
+        document.removeEventListener(pxsim.pointerEvents.up, this.handleDocumentMouseUp)
+    }
+
+    private handleFocus = (e: React.FocusEvent<HTMLDivElement>) => {
+        const { focus } = this.state;
+        if (focus) return;
+
+        this.setState({ focus: true });
+    }
+
+    private handleBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+        if (this.isMouseDown) return;
+        // Use timeout to delay examination of activeElement until after blur/focus 
+        // events have been processed.
+        setTimeout(() => {
+            let open = this.isChildFocused();
+            this.setState({ focus: open });
+        }, 1);
+    }
+
+    private focusFirst: boolean;
+    private handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        const charCode = core.keyCodeFromEvent(e);
+        if (charCode === 40 /* Down arrow key */) {
+            e.preventDefault();
+            this.focusFirst = true;
+            this.show();
+        } else if (charCode === core.SPACE_KEY || charCode === core.ENTER_KEY) {
+            e.preventDefault();
+            this.toggle();
+        }
     }
 
     renderCore() {
+        const { disabled, title, role, icon, className, children } = this.props;
+        const { open } = this.state;
+
+        const aria = {
+            'role': role || 'combobox',
+            'aria-disabled': disabled,
+            'aria-haspopup': !!disabled,
+            'aria-expanded': open
+        }
+        const menuAria = {
+            'role': 'menu',
+            'aria-label': lf("Dropdown menu {0}", title),
+            'aria-hidden': !!open
+        }
+        const classes = cx([
+            'ui',
+            open ? 'active visible' : '',
+            'dropdown',
+            icon ? 'icon' : '',
+            className || '',
+        ]);
+        const menuClasses = cx([
+            'menu',
+            open ? 'visible transition' : ''
+        ])
         return (
-            <div className={genericClassName("ui dropdown item", this.props) }
-                role="menuitem"
-                title={this.props.title}
-                tabIndex={this.props.tabIndex}
-                aria-haspopup="true">
-                {genericContent(this.props) }
-                <div className="menu"
-                    role="menu"
-                    aria-expanded={this.isOpened}
-                    aria-label={lf("Dropdown menu {0}", this.props.title) }
-                    aria-hidden={!this.isOpened}>
-                    {this.props.children}
+            <div role="listbox" ref="dropdown" title={title} {...aria}
+                className={classes}
+                onMouseDown={this.handleMouseDown}
+                onClick={this.handleClick}
+                onKeyDown={this.handleKeyDown}
+                onFocus={this.handleFocus}
+                onBlur={this.handleBlur}
+                tabIndex={0}
+            >
+                {genericContent(this.props)}
+                <div ref="menu" {...menuAria} className={menuClasses}
+                    role="menu">
+                    {children}
                 </div>
             </div>);
     }
 }
 
-export interface IconProps extends UiProps {
-    icon?: string;
-    onClick?: () => void;
-}
-
-export class Icon extends data.Component<IconProps, {}> {
-    renderCore() {
-        return <i className={`icon ${this.props.icon}`}
-            onClick={this.props.onClick}
-            aria-hidden={true} role="presentation">
-                {this.props.children}
-            </i>
-    }
-}
+///////////////////////////////////////////////////////////
+////////////             Items                /////////////
+///////////////////////////////////////////////////////////
 
 export interface ItemProps extends UiProps {
     active?: boolean;
@@ -234,13 +382,13 @@ export class Item extends data.Component<ItemProps, {}> {
                 data-value={this.props.value}
                 onClick={this.props.onClick}
                 onKeyDown={this.props.onKeyDown || fireClickOnEnter}>
-                {genericContent(this.props) }
+                {genericContent(this.props)}
                 {this.props.children}
             </div>);
     }
 }
 
-export class ButtonMenuItem extends UiElement<ItemProps> {
+export class ButtonMenuItem extends UIElement<ItemProps, {}> {
     renderCore() {
         return (
             <div className={genericClassName("ui item link", this.props, true) + ` ${this.props.active ? 'active' : ''}`}
@@ -251,99 +399,95 @@ export class ButtonMenuItem extends UiElement<ItemProps> {
                 data-value={this.props.value}
                 onClick={this.props.onClick}
                 onKeyDown={this.props.onKeyDown || fireClickOnEnter}>
-                <div className={genericClassName("ui button", this.props) }>
-                    {genericContent(this.props) }
+                <div className={genericClassName("ui button", this.props)}>
+                    {genericContent(this.props)}
                     {this.props.children}
                 </div>
             </div>);
     }
 }
 
-export interface ButtonProps extends WithPopupProps {
+///////////////////////////////////////////////////////////
+////////////            Buttons               /////////////
+///////////////////////////////////////////////////////////
+
+export interface ButtonProps extends UiProps, TooltipUIProps {
     id?: string;
     title?: string;
     ariaLabel?: string;
     ariaExpanded?: boolean;
     onClick?: (e: React.MouseEvent<HTMLElement>) => void;
     disabled?: boolean;
+    loading?: boolean;
     onKeyDown?: (e: React.KeyboardEvent<HTMLElement>) => void;
+    labelPosition?: "left" | "right";
+    color?: string;
+    size?: SIZES;
 }
 
-export class Button extends UiElement<ButtonProps> {
+export class Button extends StatelessUIElement<ButtonProps> {
     renderCore() {
-        return (
-            <button className={genericClassName("ui button", this.props) + " " + (this.props.disabled ? "disabled" : "") }
-                id={this.props.id}
-                role={this.props.role}
-                title={this.props.title}
-                tabIndex={this.props.tabIndex || 0}
-                aria-label={this.props.ariaLabel}
-                aria-expanded={this.props.ariaExpanded}
-                onClick={this.props.onClick}
-                onKeyDown={this.props.onKeyDown}>
-                {genericContent(this.props) }
-                {this.props.children}
-            </button>
-        );
+        const { labelPosition, color, size, disabled, loading } = this.props;
+        const classes = cx([
+            color,
+            size,
+            (disabled || loading) ? 'disabled' : '',
+            loading ? 'loading' : '',
+            genericClassName("ui button", this.props)
+        ])
+        const button = <button className={classes}
+            id={this.props.id}
+            role={this.props.role}
+            title={this.props.title}
+            tabIndex={this.props.tabIndex || 0}
+            aria-label={this.props.ariaLabel}
+            aria-expanded={this.props.ariaExpanded}
+            onClick={this.props.onClick}
+            onKeyDown={this.props.onKeyDown}>
+            {genericContent(this.props)}
+            {this.props.children}
+        </button>;
+        // Tooltips don't work great on IOS, disabling them
+        return this.props.tooltipId && !pxt.BrowserUtils.isIOS() ? <Tooltip id={this.props.tooltipId} content={this.props.tooltip || this.props.title}
+            place={this.props.tooltipPlace} delayShow={this.props.tooltipDelayShow}>{button}</Tooltip> : button;
     }
 }
 
+///////////////////////////////////////////////////////////
+////////////             Links                /////////////
+///////////////////////////////////////////////////////////
+
 export interface LinkProps extends ButtonProps {
     href?: string;
+    download?: string;
     target?: string;
 }
 
-export class Link extends UiElement<LinkProps> {
+export class Link extends StatelessUIElement<LinkProps> {
     renderCore() {
         return (
-            <a className={genericClassName("ui", this.props) + " " + (this.props.disabled ? "disabled" : "") }
+            <a className={genericClassName("ui", this.props) + " " + (this.props.disabled ? "disabled" : "")}
                 id={this.props.id}
                 href={this.props.href}
                 target={this.props.target}
+                download={this.props.download}
                 role={this.props.role}
                 title={this.props.title}
                 tabIndex={this.props.tabIndex || 0}
                 aria-label={this.props.ariaLabel}
                 aria-expanded={this.props.ariaExpanded}
                 onClick={this.props.onClick}
-                onKeyDown={this.props.onKeyDown}>
-                {genericContent(this.props) }
+                onKeyDown={this.props.onKeyDown || fireClickOnEnter}>
+                {genericContent(this.props)}
                 {this.props.children}
             </a>
         );
     }
 }
 
-export class Popup extends data.Component<UiProps, {}> {
-    componentDidMount() {
-        this.child(".popup-button").popup({
-            position: "bottom right",
-            on: "click",
-            hoverable: true,
-            delay: {
-                show: 50,
-                hide: 1000
-            }
-        });
-    }
-
-    componentDidUpdate() {
-        this.child(".popup-button").popup('refresh');
-    }
-
-    renderCore() {
-        return (
-            <div role={this.props.role}>
-                <div className={genericClassName("ui button popup-button", this.props) }>
-                    {genericContent(this.props) }
-                </div>
-                <div className="ui popup transition hidden">
-                    {this.props.children}
-                </div>
-            </div>
-        );
-    }
-}
+///////////////////////////////////////////////////////////
+////////////           FormField              /////////////
+///////////////////////////////////////////////////////////
 
 export class Field extends data.Component<{
     label?: string;
@@ -362,7 +506,11 @@ export class Field extends data.Component<{
     }
 }
 
-export class Input extends data.Component<{
+///////////////////////////////////////////////////////////
+////////////             Input                /////////////
+///////////////////////////////////////////////////////////
+
+export interface InputProps {
     label?: string;
     inputLabel?: string;
     class?: string;
@@ -377,7 +525,29 @@ export class Input extends data.Component<{
     selectOnClick?: boolean;
     id?: string;
     ariaLabel?: string;
-}, { value: string }> {
+    autoFocus?: boolean;
+    autoComplete?: boolean
+}
+
+export class Input extends data.Component<InputProps, { value: string }> {
+    constructor(props: InputProps) {
+        super(props);
+        this.state = {
+            value: props.value
+        }
+
+        this.copy = this.copy.bind(this);
+        this.handleClick = this.handleClick.bind(this);
+        this.handleChange = this.handleChange.bind(this);
+    }
+
+    componentWillReceiveProps(newProps: InputProps) {
+        this.setState({ value: newProps.value });
+    }
+
+    clearValue() {
+        this.setState({ value: undefined });
+    }
 
     copy() {
         const p = this.props
@@ -400,44 +570,55 @@ export class Input extends data.Component<{
         }
     }
 
+    handleClick(e: React.MouseEvent<any>) {
+        if (this.props.selectOnClick) {
+            (e.target as any).setSelectionRange(0, 9999);
+        }
+    }
+
+    handleChange(e: React.ChangeEvent<any>) {
+        const newValue = (e.target as any).value;
+        if (!this.props.readOnly && (!this.state || this.state.value !== newValue)) {
+            this.setState({ value: newValue })
+        }
+        if (this.props.onChange) {
+            this.props.onChange(newValue);
+        }
+    }
+
     renderCore() {
         let p = this.props
         let copyBtn = p.copy && document.queryCommandSupported('copy')
-            ? <Button class="ui right labeled primary icon button" text={lf("Copy") } icon="copy" onClick={() => this.copy() } />
+            ? <Button className="ui right labeled primary icon button" text={lf("Copy")} icon="copy" onClick={this.copy} />
             : null;
-
-        let value = (this.state && this.state.value !== undefined) ? this.state.value : p.value;
-
-        const onChange = (newValue: string) => {
-            if (!p.readOnly && (!this.state || this.state.value !== newValue)) {
-                this.setState({ value: newValue })
-            }
-            if (p.onChange) {
-                p.onChange(newValue);
-            }
-        };
+        const { value } = this.state;
 
         return (
             <Field ariaLabel={p.ariaLabel} htmlFor={p.id} label={p.label}>
-                <div className={"ui input" + (p.inputLabel ? " labelled" : "") + (p.copy ? " action fluid" : "") + (p.disabled ? " disabled" : "") }>
+                <div className={"ui input" + (p.inputLabel ? " labelled" : "") + (p.copy ? " action fluid" : "") + (p.disabled ? " disabled" : "")}>
                     {p.inputLabel ? (<div className="ui label">{p.inputLabel}</div>) : ""}
                     {!p.lines || p.lines == 1 ? <input
+                        autoFocus={p.autoFocus}
                         id={p.id}
                         className={p.class || ""}
                         type={p.type || "text"}
-                        placeholder={p.placeholder} value={value}
+                        placeholder={p.placeholder} value={value || ''}
                         readOnly={!!p.readOnly}
-                        onClick={(e) => p.selectOnClick ? (e.target as any).setSelectionRange(0, 9999) : undefined}
-                        onChange={v => onChange((v.target as any).value) } />
+                        onClick={this.handleClick}
+                        onChange={this.handleChange}
+                        autoComplete={p.autoComplete ? "" : "off"}
+                        autoCorrect={p.autoComplete ? "" : "off"}
+                        autoCapitalize={p.autoComplete ? "" : "off"}
+                        spellCheck={p.autoComplete} />
                         : <textarea
                             id={p.id}
-                            className={"ui input " + (p.class || "") + (p.inputLabel ? " labelled" : "") }
+                            className={"ui input " + (p.class || "") + (p.inputLabel ? " labelled" : "")}
                             rows={p.lines}
                             placeholder={p.placeholder}
-                            value={value}
+                            value={value || ''}
                             readOnly={!!p.readOnly}
-                            onClick={(e) => p.selectOnClick ? (e.target as any).setSelectionRange(0, 9999) : undefined}
-                            onChange={v => onChange((v.target as any).value) }>
+                            onClick={this.handleClick}
+                            onChange={this.handleChange}>
                         </textarea>}
                     {copyBtn}
                 </div>
@@ -446,114 +627,66 @@ export class Input extends data.Component<{
     }
 }
 
-export class Checkbox extends data.Component<{
+///////////////////////////////////////////////////////////
+////////////           Checkbox               /////////////
+///////////////////////////////////////////////////////////
+
+export interface CheckBoxProps {
     label?: string;
     inputLabel?: string;
     class?: string;
     checked?: boolean;
     onChange: (v: string) => void;
-}, {}> {
+}
+
+export class Checkbox extends data.Component<CheckBoxProps, {}> {
+    constructor(props: CheckBoxProps) {
+        super(props);
+        this.state = {
+        }
+
+        this.handleChange = this.handleChange.bind(this);
+    }
+
+    handleChange(v: React.ChangeEvent<any>) {
+        this.props.onChange(v.target.value)
+    }
 
     renderCore() {
         const p = this.props;
         return <Field label={p.label}>
             <div className={"ui toggle checkbox"}>
-                <input type="checkbox" checked={p.checked}
-                    onChange={v => p.onChange((v.target as any).value) } />
+                <input type="checkbox" checked={p.checked} aria-checked={p.checked}
+                    onChange={this.handleChange} />
                 {p.inputLabel ? <label>{p.inputLabel}</label> : undefined}
             </div>
         </Field>;
     }
 }
 
-// Segment, Menu, Modal and Portal sui elements have been implemented using some of the workings of Semantic UI React (MIT)
-// https://github.com/Semantic-Org/Semantic-UI-React
+///////////////////////////////////////////////////////////
+////////////             Icons                /////////////
+///////////////////////////////////////////////////////////
 
-export interface SegmentProps {
-    attached?: boolean | 'top' | 'bottom';
-    basic?: boolean;
-    children?: React.ReactNode;
-    circular?: boolean;
-    className?: string;
-    clearing?: boolean;
-    color?: string;
-    compact?: boolean;
-    disabled?: boolean;
-    floated?: string;
-    inverted?: boolean;
-    loading?: boolean;
-    padded?: boolean | 'very';
-    piled?: boolean;
-    raised?: boolean;
-    secondary?: boolean;
-    size?: string;
-    stacked?: boolean;
-    tertiary?: boolean;
-    textAlign?: string;
-    vertical?: boolean;
+export interface IconProps extends UiProps {
+    icon?: string;
+    onClick?: () => void;
+    onKeyDown?: () => void;
 }
 
-export interface SegmentState {
+export const Icon: React.StatelessComponent<IconProps> = (props: IconProps) => {
+    const { icon, className, onClick, onKeyDown, children, ...rest } = props;
+    return <i className={`icon ${icon} ${className ? className : ''}`}
+        onClick={onClick}
+        onKeyDown={onKeyDown || fireClickOnEnter}
+        aria-hidden={true} role="presentation" {...rest}>
+        {children}
+    </i>
 }
 
-export class Segment extends data.Component<SegmentProps, SegmentState> {
-    renderCore() {
-        const {
-            attached,
-            basic,
-            children,
-            circular,
-            className,
-            clearing,
-            color,
-            compact,
-            disabled,
-            floated,
-            inverted,
-            loading,
-            padded,
-            piled,
-            raised,
-            secondary,
-            size,
-            stacked,
-            tertiary,
-            textAlign,
-            vertical,
-        } = this.props;
-
-        const classes = cx([
-            'ui',
-            color,
-            size,
-            basic ? 'basic' : '',
-            circular ? 'circular' : '',
-            clearing ? 'clearing' : '',
-            compact ? 'compact' : '',
-            disabled ? 'disabled' : '',
-            inverted ? 'inverted' : '',
-            loading ? 'loading' : '',
-            piled ? 'piled' : '',
-            raised ? 'raised' : '',
-            secondary ? 'secondary' : '',
-            stacked ? 'stacked' : '',
-            tertiary ? 'tertiary' : '',
-            vertical ? 'vertical' : '',
-            attached ? `${attached} attached` : '',
-            padded ? `${padded} padded` : '',
-            textAlign ? (textAlign == 'justified' ? 'justified' : `${textAlign} aligned`) : '',
-            floated ? `${floated} floated` : '',
-            'segment',
-            className,
-        ]);
-
-        return (
-            <div className={classes}>
-                {children}
-            </div>
-        )
-    }
-}
+///////////////////////////////////////////////////////////
+////////////             Menu                 /////////////
+///////////////////////////////////////////////////////////
 
 export interface MenuProps {
     activeIndex?: number;
@@ -638,7 +771,7 @@ export class MenuItem extends data.Component<MenuItemProps, {}> {
         ]);
 
         if (children) {
-            return <div className={classes} onClick={this.handleClick}>{children}</div>
+            return <div role="menuitem" className={classes} onClick={this.handleClick}>{children}</div>
         }
 
         return (
@@ -660,7 +793,7 @@ export class Menu extends data.Component<MenuProps, MenuState> {
     }
 
     private handleKeyboardNavigation = (e: KeyboardEvent) => {
-        let charCode = (typeof e.which == "number") ? e.which : e.keyCode
+        const charCode = core.keyCodeFromEvent(e);
         let leftOrUpKey = charCode === 37 || charCode === 38
         let rightorBottomKey = charCode === 39 || charCode === 40
 
@@ -668,12 +801,12 @@ export class Menu extends data.Component<MenuProps, MenuState> {
             return
         }
 
-        let menuItems = this.child(".link")
+        let menuItems = this.child(".item");
         let activeNodeIndex = -1
         let i = 0
 
         while (activeNodeIndex === -1 && i < menuItems.length) {
-            if (menuItems.get(i).classList.contains("active")) {
+            if ((menuItems[i] as HTMLElement).classList.contains("active")) {
                 activeNodeIndex = i
             }
 
@@ -685,17 +818,17 @@ export class Menu extends data.Component<MenuProps, MenuState> {
         }
 
         let selectedTab: HTMLElement;
-        if ((leftOrUpKey && !Util.isUserLanguageRtl()) || (rightorBottomKey && Util.isUserLanguageRtl())) {
+        if ((leftOrUpKey && !pxt.Util.isUserLanguageRtl()) || (rightorBottomKey && pxt.Util.isUserLanguageRtl())) {
             if (activeNodeIndex === 0) {
-                selectedTab = menuItems.get(menuItems.length - 1) as HTMLElement
+                selectedTab = menuItems[menuItems.length - 1] as HTMLElement
             } else {
-                selectedTab = menuItems.get(activeNodeIndex - 1) as HTMLElement
+                selectedTab = menuItems[activeNodeIndex - 1] as HTMLElement
             }
-        } else if ((rightorBottomKey && !Util.isUserLanguageRtl()) || (leftOrUpKey && Util.isUserLanguageRtl())) {
+        } else if ((rightorBottomKey && !pxt.Util.isUserLanguageRtl()) || (leftOrUpKey && pxt.Util.isUserLanguageRtl())) {
             if (activeNodeIndex === menuItems.length - 1) {
-                selectedTab = menuItems.get(0) as HTMLElement
+                selectedTab = menuItems[0] as HTMLElement
             } else {
-                selectedTab = menuItems.get(activeNodeIndex + 1) as HTMLElement
+                selectedTab = menuItems[activeNodeIndex + 1] as HTMLElement
             }
         }
 
@@ -705,10 +838,9 @@ export class Menu extends data.Component<MenuProps, MenuState> {
         }
     }
 
-
     componentDidMount() {
-        let menuItems = this.child(".link")
-        menuItems.each((index: number, elem: HTMLElement) => {
+        let menuItems = this.child(".item");
+        menuItems.forEach((elem: HTMLElement, index: number) => {
             elem.onkeydown = this.handleKeyboardNavigation
         })
     }
@@ -767,122 +899,116 @@ export class Menu extends data.Component<MenuProps, MenuState> {
     }
 }
 
-export interface ModalAction {
+///////////////////////////////////////////////////////////
+////////////             Modal                /////////////
+///////////////////////////////////////////////////////////
+
+export interface ModalButton {
     label: string;
-    onClick: () => void;
-    className?: string;
+    icon?: string; // defaults to "checkmark"
+    className?: string; // defaults "positive"
+    onclick?: () => (Promise<void> | void);
+    resolveVal?: number;
+    url?: string;
+    fileName?: string;
     loading?: boolean;
-    icon?: string;
+    disabled?: boolean;
+    approveButton?: boolean;
 }
 
-export interface ModalProps {
-    basic?: boolean;
-    children?: any;
-    className?: string;
-    closeIcon?: any;
+export interface ModalProps extends ReactModal.Props {
     closeOnDimmerClick?: boolean;
     closeOnDocumentClick?: boolean;
     closeOnEscape?: boolean;
-    dimmer?: boolean | 'blurring' | 'inverted';
-    dimmerClassName?: string;
+
+    onClose?: () => void;
+    onKeyDown?: (ev: React.KeyboardEvent<any>) => void;
+    defaultOpen?: boolean;
+    closeIcon?: boolean | string;
+
+    size?: '' | 'fullscreen' | 'large' | 'mini' | 'small' | 'tiny';
+    className?: string;
+    basic?: boolean;
+    longer?: boolean;
+
+    header?: string;
+    headerClass?: string;
     description?: string;
 
-    onClose?: Function;
-    onOpen?: Function;
-    onPositionChanged?: Function;
+    dimmer?: boolean | string;
+    dimmerClassName?: string;
 
-    open?: boolean;
-    mountNode?: any;
-    size?: string;
-    longer?: boolean;
-    allowResetFocus?: boolean;
-
-    headerClass?: string;
-    header?: string;
     helpUrl?: string;
-
-    actions?: ModalAction[];
+    headerActions?: JSX.Element[];
+    buttons?: ModalButton[];
+    onPositionChanged?: Function;
+    allowResetFocus?: boolean;
+    modalDidOpen?: (ref: HTMLElement) => void;
 }
 
-export interface ModalState {
-    open?: boolean;
+interface ModalState {
     marginTop?: number;
     scrolling?: boolean;
+    mountClasses?: string;
 }
 
-export class Modal extends data.Component<ModalProps, ModalState> {
-    ref: any;
-    id: string;
-    animationId: number;
+export class Modal extends React.Component<ModalProps, ModalState> {
+
+    private id: string;
+    private animationRequestId: any;
+
     constructor(props: ModalProps) {
-        super(props)
-        this.id = Util.guidGen();
+        super(props);
+        this.id = ts.pxtc.Util.guidGen();
         this.state = {
-            open: this.props.open,
-            scrolling: false
         }
+
+        this.onRequestClose = this.onRequestClose.bind(this);
+        this.afterOpen = this.afterOpen.bind(this);
+    }
+
+    private afterOpen() {
+        const { modalDidOpen } = this.props;
+        this.setState({ scrolling: false });
+        this.setPositionAndClassNames();
+        if (modalDidOpen) modalDidOpen(this.getRef());
+    }
+
+    private onClose() {
+        cancelAnimationFrame(this.animationRequestId);
+    }
+
+    private getRef() {
+        const modal = this.refs["modal"];
+        const ref = modal && (modal as any).node
+            && (modal as any).node.firstChild && (modal as any).node.firstChild.firstChild;
+        return ref;
     }
 
     componentWillUnmount() {
-        this.handlePortalUnmount()
+        cancelAnimationFrame(this.animationRequestId);
     }
 
-    componentWillMount() {
-        const { open } = this.props;
-        this.setState({ open: open });
-    }
+    setPositionAndClassNames = () => {
+        const { dimmer } = this.props
+        let classes;
 
-    componentWillReceiveProps(nextProps: ModalProps) {
-        const newState: ModalState = {};
-        if (nextProps.open != undefined) {
-            newState.open = nextProps.open;
-            newState.scrolling = false;
+        if (dimmer) {
+            classes = 'dimmable dimmed';
+
+            if (dimmer === 'blurring') {
+                classes += ' blurring';
+            }
         }
 
-        if (Object.keys(newState).length > 0) this.setState(newState)
-    }
+        const newState: ModalState = {}
+        const ref = this.getRef();
 
-    getMountNode = () => this.props.mountNode || document.body;
+        if (ref) {
+            const { height } = ref.getBoundingClientRect();
 
-    handleClose = (e: Event) => {
-        if (this.state.open != false)
-            this.setState({ open: false })
-
-        const { onClose } = this.props;
-        if (onClose) onClose(e, this.props);
-    }
-
-    handleOpen = (e: Event) => {
-        const { onOpen } = this.props;
-        if (onOpen) onOpen(e, this.props);
-
-        if (this.state.open != true)
-            this.setState({ open: true, scrolling: false })
-    }
-
-    setPosition = () => {
-        if (this.ref) {
-            const { dimmer } = this.props;
-            const mountNode = this.getMountNode();
-            let height: number;
-
-            // Check to make sure the ref is actually in the DOM or else IE11 throws an exception
-            if (this.ref.parentElement) {
-                height = this.ref.getBoundingClientRect().height;
-            }
-            else {
-                height = 0;
-            }
-
-            if (dimmer) {
-                mountNode.classList.add('dimmable')
-                mountNode.classList.add('dimmed')
-            }
-
-            const marginTop = -Math.round(height / 2);
-            const scrolling = this.props.size == 'home' || height >= window.innerHeight;
-
-            const newState: ModalState = {};
+            const marginTop = -Math.round(height / 2)
+            const scrolling = height >= window.innerHeight;
 
             if (this.state.marginTop !== marginTop) {
                 newState.marginTop = marginTop;
@@ -890,311 +1016,258 @@ export class Modal extends data.Component<ModalProps, ModalState> {
 
             if (this.state.scrolling !== scrolling) {
                 newState.scrolling = scrolling;
-
-                if (scrolling) {
-                    mountNode.classList.add('scrolling');
-                } else {
-                    mountNode.classList.remove('scrolling');
-                }
             }
 
-            if (Object.keys(newState).length > 0) {
-                this.setState(newState);
-                if (this.props.onPositionChanged) this.props.onPositionChanged(this.props);
-            }
+            if (scrolling) classes += ' scrolling'
         }
 
-        this.animationId = requestAnimationFrame(this.setPosition);
-    }
+        if (this.state.mountClasses !== classes) newState.mountClasses = classes;
 
-    handlePortalMount = () => {
-        const { dimmer } = this.props;
-        const mountNode = this.getMountNode();
-
-        if (dimmer) {
-            mountNode.classList.add('dimmable');
-            mountNode.classList.add('dimmed');
-
-            if (dimmer === 'blurring' && !pxt.options.light) {
-                mountNode.classList.add('blurring');
-            }
+        if (Object.keys(newState).length > 0) {
+            this.setState(newState)
+            if (this.props.onPositionChanged) this.props.onPositionChanged(this.props);
         }
 
-        this.setPosition();
+        this.animationRequestId = requestAnimationFrame(this.setPositionAndClassNames);
     }
 
-    handleRef = (c: any) => (this.ref = c);
-
-    handlePortalUnmount = () => {
-        const mountNode = this.getMountNode();
-        mountNode.classList.remove('blurring');
-        mountNode.classList.remove('dimmable');
-        mountNode.classList.remove('dimmed');
-        mountNode.classList.remove('scrolling');
-
-        if (this.animationId) cancelAnimationFrame(this.animationId);
+    private onRequestClose() {
+        const { onClose } = this.props;
+        this.onClose();
+        onClose();
     }
 
-    renderCore() {
-        const { open } = this.state
-        const {
-            basic,
-            children,
-            className,
-            closeIcon,
-            closeOnDimmerClick,
-            closeOnDocumentClick,
-            closeOnEscape,
-            dimmer,
-            dimmerClassName,
-            size,
-            longer,
-            allowResetFocus
-        } = this.props
+    render() {
+        const { isOpen, size, longer, basic, className,
+            onClose, closeIcon, children, onKeyDown,
+            header, headerClass, headerActions, helpUrl, description,
+            closeOnDimmerClick, closeOnDocumentClick, closeOnEscape,
+            shouldCloseOnEsc, shouldCloseOnOverlayClick, shouldFocusAfterRender, ...rest } = this.props;
+        const { marginTop, scrolling, mountClasses } = this.state;
+        const isFullscreen = size == 'fullscreen';
+        const showBack = isFullscreen && !!closeIcon;
 
-        const { marginTop, scrolling } = this.state
         const classes = cx([
             'ui',
             size,
             longer ? 'longer' : '',
             basic ? 'basic' : '',
             scrolling ? 'scrolling' : '',
+            closeIcon ? 'closable' : '',
             'modal transition visible active',
-            className,
+            className
         ]);
+        const portalClassName = cx([
+            core.highContrast ? 'hc' : '',
+            mountClasses
+        ])
+        const closeIconName = closeIcon === true ? 'close' : closeIcon as string;
+        const aria = {
+            labelledby: header ? this.id + 'title' : undefined,
+            describedby: description ? this.id + 'description' : this.id + 'desc'
+        }
+        const customStyles = {
+            content: {
+                marginTop: marginTop
+            }
+        }
 
-        const closeIconName = closeIcon === true ? 'close' : closeIcon;
-
-        const modalJSX = (
-            <div className={classes} style={{ marginTop }} ref={this.handleRef} role="dialog" aria-labelledby={this.props.header ? this.id + 'title' : undefined} aria-describedby={this.props.description ? this.id + 'description' : this.id + 'desc'} >
-                {this.props.header ? <div id={this.id + 'title'} className={"header " + (this.props.headerClass || "") }>
-                    {this.props.header}
-                    {this.props.helpUrl ?
-                        <a className={`ui huge icon clear focused`} href={this.props.helpUrl} target="_docs" role="button" aria-label={lf("Help on {0} dialog", this.props.header) }>
+        return <ReactModal isOpen={isOpen} ref="modal" appElement={appElement}
+            onRequestClose={this.onRequestClose} onAfterOpen={this.afterOpen}
+            shouldReturnFocusAfterClose={true} shouldFocusAfterRender={shouldFocusAfterRender}
+            shouldCloseOnEsc={shouldCloseOnEsc || closeOnEscape}
+            shouldCloseOnOverlayClick={shouldCloseOnOverlayClick || (closeOnDocumentClick || closeOnDimmerClick)}
+            portalClassName={portalClassName}
+            overlayClassName={`ui page modals dimmer transition ${isOpen ? 'visible active' : ''}`}
+            className={classes}
+            style={customStyles}
+            aria={aria} {...rest}>
+            {header || showBack || helpUrl ? <div id={this.id + 'title'} className={"header " + (headerClass || "")}>
+                <span className="header-title" style={{ margin: `0 ${helpUrl ? '-20rem' : '0'} 0 ${showBack ? '-20rem' : '0'}` }}>{header}</span>
+                {showBack ? <div className="header-close">
+                    <Button className="back-button large" title={lf("Go back")} onClick={onClose} tabIndex={0} onKeyDown={fireClickOnEnter}>
+                        <Icon icon="arrow left" />
+                        <span className="ui text landscape only">{lf("Go back")}</span>
+                    </Button>
+                </div> : undefined}
+                {helpUrl ?
+                    <div className="header-help">
+                        <a className={`ui icon help-button`} href={helpUrl} target="_docs" role="button" aria-label={lf("Help on {0} dialog", header)}>
                             <Icon icon="help" />
                         </a>
-                        : undefined}
-                </div> : undefined}
-                {this.props.description ? <label id={this.id + 'description'} className="accessible-hidden">{this.props.description}</label> : undefined}
-                <div id={this.id + 'desc'} className={`${longer ? 'scrolling' : ''} content`}>
-                    {children}
-                </div>
-                {this.props.actions && this.props.actions.length > 0 ?
-                    <div className="actions">
-                        {this.props.actions.map(action =>
-                            <Button
+                    </div>
+                    : undefined}
+            </div> : undefined}
+            {isFullscreen && headerActions ? <div className="header-actions">{headerActions}</div> : undefined}
+            {!isFullscreen && description ? <label id={this.id + 'description'} className="accessible-hidden">{description}</label> : undefined}
+            <div id={this.id + 'desc'} className={`${longer ? 'scrolling' : ''} ${headerActions ? 'has-actions' : ''} content`}>
+                {children}
+            </div>
+            {!isFullscreen && this.props.buttons && this.props.buttons.length > 0 ?
+                <div className="actions">
+                    {this.props.buttons.map(action =>
+                        action.url ?
+                            <Link
                                 key={`action_${action.label}`}
                                 icon={action.icon}
                                 text={action.label}
-                                class={`approve ${action.icon ? 'icon right labeled' : ''} ${action.className || ''} ${action.loading ? "loading disabled" : ""} focused`}
-                                onClick={() => {
-                                    action.onClick();
-                                } }
-                                onKeyDown={fireClickOnEnter} />
-                        ) }
-                    </div> : undefined}
-                {closeIcon ? <Button
-                    icon={closeIconName}
-                    class={`huge clear right floated closeIcon focused`}
-                    onClick={() => this.handleClose(null) }
-                    tabIndex={0}
-                    ariaLabel={lf("Close dialog") } /> : undefined}
-            </div>
-        )
-
-        const dimmerClasses = !dimmer
-            ? null
-            : cx([
-                core.highContrast ? 'hc' : '',
-                'ui',
-                size,
-                dimmer === 'inverted' ? 'inverted' : '',
-                pxt.options.light ? '' : "transition",
-                'page modals dimmer visible active',
-                dimmerClassName
-            ]);
-
-        const blurring = dimmer === 'blurring';
-
-        return (
-            <Portal
-                closeOnRootNodeClick={closeOnDimmerClick}
-                closeOnDocumentClick={closeOnDocumentClick}
-                closeOnEscape={closeOnEscape}
-                className={dimmerClasses}
-                mountNode={this.getMountNode() }
-                onMount={this.handlePortalMount}
-                onUnmount={this.handlePortalUnmount}
-                onClose={this.handleClose}
-                onOpen={this.handleOpen}
-                open={open}
-                allowResetFocus={allowResetFocus}>
-                {modalJSX}
-            </Portal>
-        )
+                                className={`ui button approve ${action.icon ? 'icon right labeled' : ''} ${action.className || ''} ${action.loading ? "loading disabled" : ""} ${action.disabled ? "disabled" : ""}`}
+                                href={action.url}
+                                target={!action.fileName ? '_blank' : undefined}
+                                download={action.fileName ? pxt.Util.htmlEscape(action.fileName) : undefined}
+                            />
+                            : <ModalButtonElement
+                                key={`action_${action.label}`}
+                                {...action} />
+                    )}
+                </div> : undefined}
+            {!isFullscreen && closeIcon ? <div role="button" className="closeIcon" tabIndex={0}
+                onClick={onClose}
+                onKeyDown={fireClickOnEnter}
+            ><Icon icon="close remove circle" /> </div> : undefined}
+        </ReactModal>
     }
 }
 
-interface PortalProps {
-    children?: any;
-    className?: string;
-    open?: boolean;
-    onOpen?: Function;
-    onClose?: Function;
-    onMount?: Function;
-    onUnmount?: Function;
-    mountNode?: HTMLElement;
-    closeOnRootNodeClick?: boolean;
-    closeOnDocumentClick?: boolean;
-    closeOnEscape?: boolean;
-    allowResetFocus?: boolean;
-}
-
-interface PortalState {
-    open?: boolean;
-}
-
-export class Portal extends data.Component<PortalProps, PortalState> {
-    rootNode: HTMLElement;
-    portalNode: Element;
-    focusedNodeBeforeOpening: HTMLElement;
-    constructor(props: PortalProps) {
+class ModalButtonElement extends data.PureComponent<ModalButton, {}> {
+    constructor(props: ModalButton) {
         super(props);
-        this.focusedNodeBeforeOpening = null;
-    }
-
-    componentDidMount() {
-        if (this.state.open) {
-            this.renderPortal();
-        }
-    }
-
-    componentDidUpdate(prevProps: PortalProps, prevState: PortalState) {
-        if (this.state.open) {
-            this.renderPortal()
+        this.state = {
         }
 
-        if (prevState.open && !this.state.open) {
-            this.unmountPortal();
-        }
+        this.handleClick = this.handleClick.bind(this);
     }
 
-    componentWillUnmount() {
-        this.unmountPortal();
-    }
-
-    componentWillMount() {
-        const { open } = this.props;
-        this.setState({ open: open });
-    }
-
-    componentWillReceiveProps(nextProps: ModalProps) {
-        const newState: ModalState = {};
-        if (nextProps.open != undefined) {
-            newState.open = nextProps.open;
-        }
-
-        if (Object.keys(newState).length > 0) this.setState(newState)
-    }
-
-    handleDocumentClick = (e: MouseEvent) => {
-        const { closeOnDocumentClick, closeOnRootNodeClick } = this.props;
-
-        if (!this.rootNode || !this.portalNode || this.portalNode.contains(e.target as Node)) return;
-        const didClickInRootNode = this.rootNode.contains(e.target as Node);
-
-        if (closeOnDocumentClick && !didClickInRootNode || closeOnRootNodeClick && didClickInRootNode) {
-            this.close(e);
-        }
-    }
-
-    handleEscape = (e: KeyboardEvent) => {
-        let charCode = (typeof e.which == "number") ? e.which : e.keyCode
-        if (charCode !== 27) {
-            return;
-        }
-        const { closeOnEscape } = this.props;
-        if (closeOnEscape) {
-            e.preventDefault();
-            this.close(e);
-        }
-    }
-
-    close = (e: Event) => {
-        if (this.state.open != false)
-            this.setState({ open: false })
-
-        const { onClose } = this.props;
-        if (onClose) onClose(e);
-    }
-
-    open = (e: Event) => {
-        const { onOpen } = this.props;
-        if (onOpen) onOpen(e);
-
-        if (this.state.open != true)
-            this.setState({ open: true })
-    }
-
-    mountPortal = () => {
-        if (this.rootNode) return;
-
-        const { mountNode = document.body } = this.props;
-
-        this.rootNode = document.createElement('div');
-        mountNode.appendChild(this.rootNode);
-
-        document.addEventListener('click', this.handleDocumentClick)
-        document.addEventListener('keydown', this.handleEscape, true)
-
-        const { onMount } = this.props
-        if (onMount) onMount()
-    }
-
-    unmountPortal = () => {
-        if (!this.rootNode) return;
-
-        ReactDOM.unmountComponentAtNode(this.rootNode);
-        this.rootNode.parentNode.removeChild(this.rootNode);
-
-        this.rootNode = null;
-        this.portalNode = null;
-
-        document.removeEventListener('click', this.handleDocumentClick);
-        document.removeEventListener('keydown', this.handleEscape, true);
-
-        const { onUnmount } = this.props;
-        if (onUnmount) onUnmount();
-
-        if (this.focusedNodeBeforeOpening !== null) {
-            this.focusedNodeBeforeOpening.focus();
-            this.focusedNodeBeforeOpening = null;
-        }
-    }
-
-    renderPortal() {
-        const { children, className, open, allowResetFocus } = this.props;
-
-        this.mountPortal();
-
-        this.rootNode.className = className || '';
-
-        ReactDOM.unstable_renderSubtreeIntoContainer(
-            this,
-            React.Children.only(children),
-            this.rootNode
-        )
-
-        if (this.focusedNodeBeforeOpening === null) {
-            this.focusedNodeBeforeOpening = document.activeElement as HTMLElement;
-        }
-
-        this.portalNode = this.rootNode.firstElementChild;
-        core.initializeFocusTabIndex(this.portalNode, allowResetFocus);
+    handleClick() {
+        if (!this.props.disabled)
+            this.props.onclick();
     }
 
     renderCore() {
-        return <div />;
+        const action = this.props;
+        return <Button
+            icon={action.icon}
+            text={action.label}
+            className={`approve ${action.icon ? 'icon right labeled' : ''} ${action.className || ''} ${action.loading ? "loading disabled" : ""} ${action.disabled ? "disabled" : ""}`}
+            onClick={this.handleClick}
+            onKeyDown={fireClickOnEnter} />
+    }
+}
+
+///////////////////////////////////////////////////////////
+////////////             Dimmer               /////////////
+///////////////////////////////////////////////////////////
+
+export interface DimmerProps extends ReactModal.Props {
+    className?: string;
+    disabled?: boolean;
+    inverted?: boolean;
+    page?: boolean;
+    simple?: boolean;
+    active?: boolean;
+    onClose?: () => void;
+    closable?: boolean;
+}
+
+export interface DimmerState {
+}
+
+export class Dimmer extends UIElement<DimmerProps, DimmerState> {
+
+    render() {
+        const { disabled, inverted, page, simple,
+            closable, onClose, active, children, ...rest } = this.props;
+        const portalClasses = cx([
+            'ui dimmer',
+            active ? 'active transition visible' : '',
+            disabled ? 'disabled' : '',
+            inverted ? 'inverted' : '',
+            page ? 'page' : '',
+            simple ? 'simple' : ''
+        ])
+        const customStyles = {
+            content: {
+                background: 'none',
+                border: '0'
+            }
+        }
+        return <ReactModal
+            appElement={appElement}
+            style={customStyles}
+            shouldCloseOnOverlayClick={closable}
+            onRequestClose={onClose}
+            overlayClassName={portalClasses}
+            {...rest}>
+            {children}
+        </ReactModal>
+    }
+}
+
+///////////////////////////////////////////////////////////
+////////////             Loader               /////////////
+///////////////////////////////////////////////////////////
+
+export interface LoaderProps {
+    active?: boolean;
+    className?: string;
+    disabled?: boolean;
+    inverted?: boolean;
+    size?: SIZES
+}
+
+export class Loader extends UIElement<LoaderProps, {}> {
+
+    render() {
+        const { active, children, disabled, inverted, size, className } = this.props;
+        const classes = cx([
+            'ui loader',
+            size,
+            active ? 'active' : '',
+            disabled ? 'disabled' : '',
+            inverted ? 'inverted' : '',
+            children ? 'text' : '',
+            className
+        ])
+        return <div
+            className={classes}>
+            {children}
+        </div>
+    }
+}
+
+///////////////////////////////////////////////////////////
+////////////           Tooltip                /////////////
+///////////////////////////////////////////////////////////
+
+export interface TooltipUIProps {
+    tooltip?: string;
+    tooltipId?: string;
+    tooltipDelayShow?: number;
+    tooltipPlace?: "top" | "left" | "right" | "bottom";
+}
+
+export interface TooltipProps extends ReactTooltip.Props {
+    content: string;
+}
+
+export class Tooltip extends React.Component<TooltipProps, {}> {
+
+    constructor(props: TooltipProps) {
+        super(props);
+        this.state = {
+        }
     }
 
+    render() {
+        const { id, content, className, ...rest } = this.props;
+
+        return <div>
+            <div data-tip='tooltip' data-for={id}>
+                {this.props.children}
+            </div>
+            <ReactTooltip id={id} className={`pxt-tooltip ${className || ''}`} effect='solid' {...rest}>
+                {content}
+            </ReactTooltip>
+        </div>
+    }
 }

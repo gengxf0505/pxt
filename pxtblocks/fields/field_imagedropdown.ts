@@ -6,23 +6,23 @@ namespace pxtblockly {
         columns?: string;
         maxRows?: string;
         width?: string;
-        itemColour?: string;
     }
 
     export class FieldImageDropdown extends Blockly.FieldDropdown implements Blockly.FieldCustom {
         public isFieldCustom_ = true;
         // Width in pixels
-        private width_: number;
+        protected width_: number;
 
         // Columns in grid
-        private columns_: number;
+        protected columns_: number;
 
         // Number of rows to display (if there are extra rows, the picker will be scrollable)
-        private maxRows_: number;
+        protected maxRows_: number;
 
-        private backgroundColour_: string;
-        private itemColour_: string;
-        private borderColour_: string;
+        protected backgroundColour_: string;
+        protected borderColour_: string;
+
+        protected savedPrimary_: string;
 
         constructor(text: string, options: FieldImageDropdownOptions, validator?: Function) {
             super(options.data);
@@ -32,8 +32,7 @@ namespace pxtblockly {
             this.width_ = parseInt(options.width) || 300;
 
             this.backgroundColour_ = pxtblockly.parseColour(options.colour);
-            this.itemColour_ = options.itemColour || "rgba(255, 255, 255, 0.6)";
-            this.borderColour_ = Blockly.PXTUtils.fadeColour(this.backgroundColour_, 0.4, false);
+            this.borderColour_ = pxt.toolbox.fadeColor(this.backgroundColour_, 0.4, false);
         }
 
         /**
@@ -49,19 +48,20 @@ namespace pxtblockly {
             Blockly.DropDownDiv.hideWithoutAnimation();
             Blockly.DropDownDiv.clearContent();
             // Populate the drop-down with the icons for this field.
-            let dropdownDiv = Blockly.DropDownDiv.getContentDiv();
+            let dropdownDiv = Blockly.DropDownDiv.getContentDiv() as HTMLElement;
             let contentDiv = document.createElement('div');
             // Accessibility properties
             contentDiv.setAttribute('role', 'menu');
             contentDiv.setAttribute('aria-haspopup', 'true');
             const options = this.getOptions();
-            for (let i = 0, option: any; option = options[i]; i++) {
+            let maxButtonHeight: number = 0;
+            for (let i = 0; i < options.length; i++) {
                 let content = (options[i] as any)[0]; // Human-readable text or image.
                 const value = (options[i] as any)[1]; // Language-neutral value.
                 // Icons with the type property placeholder take up space but don't have any functionality
                 // Use for special-case layouts
                 if (content.type == 'placeholder') {
-                let placeholder = document.createElement('span');
+                    let placeholder = document.createElement('span');
                     placeholder.setAttribute('class', 'blocklyDropDownPlaceholder');
                     placeholder.style.width = content.width + 'px';
                     placeholder.style.height = content.height + 'px';
@@ -73,12 +73,17 @@ namespace pxtblockly {
                 button.setAttribute('role', 'menuitem');
                 button.setAttribute('class', 'blocklyDropDownButton');
                 button.title = content.alt;
+                let buttonSize = content.height;
                 if (this.columns_) {
-                    button.style.width = ((this.width_ / this.columns_) - 8) + 'px';
-                    button.style.height = ((this.width_ / this.columns_) - 8) + 'px';
+                    buttonSize = ((this.width_ / this.columns_) - 8);
+                    button.style.width = buttonSize + 'px';
+                    button.style.height = buttonSize + 'px';
                 } else {
                     button.style.width = content.width + 'px';
                     button.style.height = content.height + 'px';
+                }
+                if (buttonSize > maxButtonHeight) {
+                    maxButtonHeight = buttonSize;
                 }
                 let backgroundColor = this.backgroundColour_;
                 if (value == this.getValue()) {
@@ -89,19 +94,11 @@ namespace pxtblockly {
                 button.style.backgroundColor = backgroundColor;
                 button.style.borderColor = this.borderColour_;
                 Blockly.bindEvent_(button, 'click', this, this.buttonClick_);
-                Blockly.bindEvent_(button, 'mouseup', this, this.buttonClick_);
-                // These are applied manually instead of using the :hover pseudoclass
-                // because Android has a bad long press "helper" menu and green highlight
-                // that we must prevent with ontouchstart preventDefault
-                Blockly.bindEvent_(button, 'mousedown', button, function(e) {
-                    this.setAttribute('class', 'blocklyDropDownButton blocklyDropDownButtonHover');
-                    e.preventDefault();
-                });
-                Blockly.bindEvent_(button, 'mouseover', button, function() {
+                Blockly.bindEvent_(button, 'mouseover', button, function () {
                     this.setAttribute('class', 'blocklyDropDownButton blocklyDropDownButtonHover');
                     contentDiv.setAttribute('aria-activedescendant', this.id);
                 });
-                Blockly.bindEvent_(button, 'mouseout', button, function() {
+                Blockly.bindEvent_(button, 'mouseout', button, function () {
                     this.setAttribute('class', 'blocklyDropDownButton');
                     contentDiv.removeAttribute('aria-activedescendant');
                 });
@@ -117,16 +114,29 @@ namespace pxtblockly {
             }
             contentDiv.style.width = this.width_ + 'px';
             dropdownDiv.appendChild(contentDiv);
+            if (this.maxRows_) {
+                // Limit the number of rows shown, but add a partial next row to indicate scrolling
+                dropdownDiv.style.maxHeight = (this.maxRows_ + 0.4) * (maxButtonHeight + 8) + 'px';
+            }
+
+            if (pxt.BrowserUtils.isFirefox()) {
+                // This is to compensate for the scrollbar that overlays content in Firefox. It
+                // gets removed in onHide_()
+                dropdownDiv.style.paddingRight = "20px";
+            }
 
             Blockly.DropDownDiv.setColour(this.backgroundColour_, this.borderColour_);
 
-            let scale = this.sourceBlock_.workspace.scale;
-            // Offset for icon-type horizontal blocks.
-            let secondaryYOffset = (
-                -(Blockly.BlockSvg.MIN_BLOCK_Y * scale) - (Blockly.BlockSvg.FIELD_Y_OFFSET * scale)
-            );
-            let renderedPrimary = Blockly.DropDownDiv.showPositionedByBlock(
-                this, this.sourceBlock_, this.onHide_.bind(this), secondaryYOffset);
+            Blockly.DropDownDiv.showPositionedByBlock(
+                this, this.sourceBlock_, this.onHide_.bind(this));
+
+            if (this.sourceBlock_.isShadow()) {
+                this.savedPrimary_ = this.sourceBlock_.getColour();
+                this.sourceBlock_.setColour(this.sourceBlock_.getColourTertiary(),
+                    this.sourceBlock_.getColourSecondary(), this.sourceBlock_.getColourTertiary());
+            } else if (this.box_) {
+                this.box_.setAttribute('fill', this.sourceBlock_.getColourTertiary());
+            }
         }
 
         /**
@@ -135,8 +145,9 @@ namespace pxtblockly {
          * @param {Event} e DOM event for the click/touch
          * @private
          */
-        private buttonClick_ = function(e: any) {
+        protected buttonClick_ = function (e: any) {
             let value = e.target.getAttribute('data-value');
+            if (!value) return;
             this.setValue(value);
             this.setText(value);
             Blockly.DropDownDiv.hide();
@@ -145,10 +156,22 @@ namespace pxtblockly {
         /**
          * Callback for when the drop-down is hidden.
          */
-        private onHide_ = function() {
-            Blockly.DropDownDiv.content_.removeAttribute('role');
-            Blockly.DropDownDiv.content_.removeAttribute('aria-haspopup');
-            Blockly.DropDownDiv.content_.removeAttribute('aria-activedescendant');
+        protected onHide_() {
+            let content = Blockly.DropDownDiv.getContentDiv() as HTMLElement;
+            content.removeAttribute('role');
+            content.removeAttribute('aria-haspopup');
+            content.removeAttribute('aria-activedescendant');
+            content.style.width = '';
+            content.style.paddingRight = '';
+
+            if (this.sourceBlock_) {
+                if (this.sourceBlock_.isShadow()) {
+                    this.sourceBlock_.setColour(this.savedPrimary_,
+                        this.sourceBlock_.getColourSecondary(), this.sourceBlock_.getColourTertiary());
+                } else if (this.box_) {
+                    this.box_.setAttribute('fill', this.sourceBlock_.getColour());
+                }
+            }
         };
 
         /**
@@ -178,15 +201,16 @@ namespace pxtblockly {
                 );
                 this.textElement_.parentNode.appendChild(this.arrow_);
             }
-            if (this.sourceBlock_ && this.sourceBlock_.rendered) {
-                this.sourceBlock_.render();
-                this.sourceBlock_.bumpNeighbours_();
+            const sourceBlock = this.sourceBlock_ as Blockly.BlockSvg;
+            if (sourceBlock && sourceBlock.rendered) {
+                sourceBlock.render();
+                sourceBlock.bumpNeighbours_();
             }
         };
 
         /**
          * Updates the width of the field. This calls getCachedWidth which won't cache
-         * the approximated width on IE/Edge when `getComputedTextLength` fails. Once
+         * the approximated width on IE/Microsoft Edge when `getComputedTextLength` fails. Once
          * it eventually does succeed, the result will be cached.
          **/
         updateWidth() {
@@ -236,16 +260,18 @@ namespace pxtblockly {
             }
 
             // Empty the text element.
-            goog.dom.removeChildren(/** @type {!Element} */ (this.textElement_));
+            goog.dom.removeChildren(/** @type {!Element} */(this.textElement_));
             goog.dom.removeNode(this.imageElement_);
             this.imageElement_ = null;
             if (this.imageJson_) {
                 // Image option is selected.
                 this.imageElement_ = Blockly.utils.createSvgElement('image',
-                    {'y': 5, 'x': 8, 'height': this.imageJson_.height + 'px',
-                    'width': this.imageJson_.width + 'px'});
+                    {
+                        'y': 5, 'x': 8, 'height': this.imageJson_.height + 'px',
+                        'width': this.imageJson_.width + 'px'
+                    });
                 this.imageElement_.setAttributeNS('http://www.w3.org/1999/xlink',
-                                                'xlink:href', this.imageJson_.src);
+                    'xlink:href', this.imageJson_.src);
                 this.size_.height = Number(this.imageJson_.height) + 10;
 
                 this.textElement_.parentNode.appendChild(this.imageElement_);

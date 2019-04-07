@@ -2,6 +2,18 @@
 
 namespace pxt.blocks {
     const THIS_NAME = "this";
+
+    // The JS Math functions supported in the blocks. The order of this array
+    // determines the order of the dropdown in the math_js_op block
+    export const MATH_FUNCTIONS = {
+        unary: ["sqrt", "sin", "cos", "tan"],
+        binary: ["atan2"],
+        infix: ["idiv", "imul"]
+    };
+
+    // Like MATH_FUNCTIONS, but used only for rounding operations
+    export const ROUNDING_FUNCTIONS = ["round", "ceil", "floor", "trunc"];
+
     export interface BlockParameter {
         // Declared parameter name as it appears in the code. This is the name used
         // when customizing the field in the comment attributes
@@ -54,7 +66,8 @@ namespace pxt.blocks {
 
     export interface HandlerArg {
         name: string,
-        type: string
+        type: string,
+        inBlockDef: boolean
     }
 
     // Information for blocks that compile to function calls but are defined by vanilla Blockly
@@ -65,15 +78,25 @@ namespace pxt.blocks {
         "Math.max": { blockId: "math_op2", params: ["x", "y"] }
     };
 
-    export function normalizeBlock(b: string): string {
+    export function normalizeBlock(b: string, err: (msg: string) => void = pxt.log): string {
         if (!b) return b;
         // normalize and validate common errors
         // made while translating
-        let nb = b.replace(/%\s+/g, '%');
+        let nb = b.replace(/[^\\]%\s+/g, '%');
         if (nb != b) {
-            pxt.log(`block has extra spaces: ${b}`);
+            err(`block has extra spaces: ${b}`);
             return b;
         }
+
+        // remove spaces around %foo = ==> %foo=
+        b = nb;
+        nb = b.replace(/(%\w+)\s*=\s*(\w+)/, '$1=$2');
+        if (nb != b) {
+            err(`block has space between %name and = : ${b}`)
+            b = nb;
+        }
+
+        // remove spaces before after pipe
         nb = nb.replace(/\s*\|\s*/g, '|');
         return nb;
     }
@@ -96,13 +119,26 @@ namespace pxt.blocks {
             defParameters.push(...fn.attributes._expandedDef.parameters);
         }
 
+        const refMap: Map<pxtc.BlockParameter> = {};
+
+        const definitionsWithoutRefs = defParameters ? defParameters.filter(p => {
+            if (p.ref) {
+                refMap[p.name] = p;
+                return false;
+            }
+            return true;
+        }) : [];
+
         if (instance && hasBlockDef && defParameters.length) {
-            const defName = defParameters[0].name;
+            const def = refMap[THIS_NAME] || defParameters[0];
+            const defName = def.name;
+            const isVar = !def.shadowBlockId || def.shadowBlockId === "variables_get";
             res.thisParameter = {
                 actualName: THIS_NAME,
                 definitionName: defName,
-                shadowBlockId: defParameters[0].shadowBlockId,
+                shadowBlockId: def.shadowBlockId,
                 type: fn.namespace,
+                defaultValue: isVar ? def.varName : undefined,
 
                 // Normally we pass ths actual parameter name, but the "this" parameter doesn't have one
                 fieldEditor: fieldEditor(defName, THIS_NAME),
@@ -112,34 +148,49 @@ namespace pxt.blocks {
         }
 
         if (fn.parameters) {
+            let defIndex = (instance && !refMap[THIS_NAME]) ? 1 : 0;
             fn.parameters.forEach((p, i) => {
-                const defIndex = instance ? i + 1 : i;
-                if (!hasBlockDef || defIndex < defParameters.length) {
-                    const def = hasBlockDef && defParameters[defIndex];
+                let def: pxtc.BlockParameter;
+
+                if (refMap[p.name]) {
+                    def = refMap[p.name];
+                }
+                else if (defIndex < definitionsWithoutRefs.length) {
+                    def = definitionsWithoutRefs[defIndex];
+                    ++defIndex;
+                }
+
+                if (def || !hasBlockDef) {
                     let range: { min: number, max: number } = undefined;
                     if (p.options && p.options["min"] && p.options["max"]) {
                         range = { min: p.options["min"].value, max: p.options["max"].value };
                     }
 
-                    const defName = def ? def.name : (bInfo ? bInfo.params[defIndex] : p.name);
+                    const defName = def ? def.name : (bInfo ? bInfo.params[defIndex++] : p.name);
+                    const isVar = (def && def.shadowBlockId) === "variables_get";
 
                     (res.parameters as BlockParameter[]).push({
                         actualName: p.name,
                         type: p.type,
-                        defaultValue: p.default,
+                        defaultValue: isVar ? (def.varName || p.default) : p.default,
                         definitionName: defName,
                         shadowBlockId: def && def.shadowBlockId,
-                        isOptional: defIndex >= optionalStart,
+                        isOptional: defParameters ? defParameters.indexOf(def) >= optionalStart : false,
                         fieldEditor: fieldEditor(defName, p.name),
                         fieldOptions: fieldOptions(defName, p.name),
                         shadowOptions: shadowOptions(defName, p.name),
                         range
                     });
-
                 }
 
                 if (p.handlerParameters) {
-                    p.handlerParameters.forEach(arg => res.handlerArgs.push(arg))
+                    p.handlerParameters.forEach(arg => {
+                        res.handlerArgs.push({
+                            name: arg.name,
+                            type: arg.type,
+                            inBlockDef: defParameters ? defParameters.some(def => def.ref && def.name === arg.name) : false
+                        });
+                    })
                 }
             });
         }
@@ -167,6 +218,34 @@ namespace pxt.blocks {
         }
     }
 
+    /**
+     * Returns which Blockly block type to use for an argument reporter based
+     * on the specified TypeScript type.
+     * @param varType The variable's TypeScript type
+     * @return The Blockly block type of the reporter to be used
+     */
+    export function reporterTypeForArgType(varType: string) {
+        let reporterType = "argument_reporter_custom";
+
+        if (varType === "boolean" || varType === "number" || varType === "string") {
+            reporterType = `argument_reporter_${varType}`;
+        }
+
+        return reporterType;
+    }
+
+    export function defaultIconForArgType(typeName: string = "") {
+        switch (typeName) {
+            case "number":
+                return "calculator";
+            case "string":
+                return "text width";
+            case "boolean":
+                return "random";
+            default:
+                return "align justify"
+        }
+    }
 
     export interface FieldDescription {
         n: string;
@@ -223,6 +302,17 @@ namespace pxt.blocks {
                     appendField: Util.lf("{id:while}do")
                 }
             },
+            'pxt_controls_for': {
+                name: Util.lf("a loop that repeats the number of times you say"),
+                tooltip: Util.lf("Have the variable '{0}' take on the values from 0 to the end number, counting by 1, and do the specified blocks."), // The name of the iteration variable that goes in {0} is replaced in blocklyloader
+                url: 'blocks/loops/for',
+                category: 'loops',
+                block: {
+                    message0: Util.lf("for %1 from 0 to %2"),
+                    variable: Util.lf("{id:var}index"),
+                    appendField: Util.lf("{id:for}do")
+                }
+            },
             'controls_simple_for': {
                 name: Util.lf("a loop that repeats the number of times you say"),
                 tooltip: Util.lf("Have the variable '{0}' take on the values from 0 to the end number, counting by 1, and do the specified blocks."), // The name of the iteration variable that goes in {0} is replaced in blocklyloader
@@ -232,6 +322,17 @@ namespace pxt.blocks {
                     message0: Util.lf("for %1 from 0 to %2"),
                     variable: Util.lf("{id:var}index"),
                     appendField: Util.lf("{id:for}do")
+                }
+            },
+            'pxt_controls_for_of': {
+                name: Util.lf("a loop that repeats for each value in an array"),
+                tooltip: Util.lf("Have the variable '{0}' take the value of each item in the array one by one, and do the specified blocks."), // The name of the iteration variable that goes in {0} is replaced in blocklyloader
+                url: 'blocks/loops/for-of',
+                category: 'loops',
+                block: {
+                    message0: Util.lf("for element %1 of %2"),
+                    variable: Util.lf("{id:var}value"),
+                    appendField: Util.lf("{id:for_of}do")
                 }
             },
             'controls_for_of': {
@@ -270,7 +371,7 @@ namespace pxt.blocks {
                 name: Util.lf("{id:block}number"),
                 url: '/blocks/math/random',
                 category: 'math',
-                tooltip: (pxt.appTarget.compile && pxt.appTarget.compile.floatingPoint) ?
+                tooltip: (pxt.appTarget && pxt.appTarget.compile) ?
                     Util.lf("a decimal number") : Util.lf("an integer number")
             },
             'math_integer': {
@@ -283,7 +384,7 @@ namespace pxt.blocks {
                 name: Util.lf("{id:block}number"),
                 url: '/blocks/math/random',
                 category: 'math',
-                tooltip: Util.lf("an whole number")
+                tooltip: Util.lf("a whole number")
             },
             'math_number_minmax': {
                 name: Util.lf("{id:block}number"),
@@ -321,6 +422,52 @@ namespace pxt.blocks {
                     MATH_MODULO_TITLE: Util.lf("remainder of %1 ÷ %2")
                 }
             },
+            'math_js_op': {
+                name: Util.lf("math function"),
+                tooltip: {
+                    "sqrt": Util.lf("Returns the square root of the argument"),
+                    "sin": Util.lf("Returns the sine of the argument"),
+                    "cos": Util.lf("Returns the cosine of the argument"),
+                    "tan": Util.lf("Returns the tangent of the argument"),
+                    "atan2": Util.lf("Returns the arctangent of the quotient of the two arguments"),
+                    "idiv": Util.lf("Returns the integer portion of the division operation on the two arguments"),
+                    "imul": Util.lf("Returns the integer portion of the multiplication operation on the two arguments")
+                },
+                url: '/blocks/math',
+                operators: {
+                    'OP': ["sqrt", "sin", "cos", "tan", "atan2", "idiv", "imul"]
+                },
+                category: 'math',
+                block: {
+                    "sqrt": Util.lf("{id:op}square root"),
+                    "sin": Util.lf("{id:op}sin"),
+                    "cos": Util.lf("{id:op}cos"),
+                    "tan": Util.lf("{id:op}tan"),
+                    "atan2": Util.lf("{id:op}atan2"),
+                    "idiv": Util.lf("{id:op}integer ÷"),
+                    "imul": Util.lf("{id:op}integer ×"),
+                }
+            },
+            "math_js_round": {
+                name: Util.lf("rounding functions"),
+                tooltip: {
+                    "round": Util.lf("Increases the argument to the next higher whole number if its fractional part is more than one half"),
+                    "ceil": Util.lf("Increases the argument to the next higher whole number"),
+                    "floor": Util.lf("Decreases the argument to the next lower whole number"),
+                    "trunc": Util.lf("Removes the fractional part of the argument")
+                },
+                url: '/blocks/math',
+                operators: {
+                    "OP": ["round", "ceil", "floor", "trunc"]
+                },
+                category: 'math',
+                block: {
+                    "round": Util.lf("{id:op}round"),
+                    "ceil": Util.lf("{id:op}ceiling"),
+                    "floor": Util.lf("{id:op}floor"),
+                    "trunc": Util.lf("{id:op}truncate"),
+                }
+            },
             'variables_change': {
                 name: Util.lf("update the value of a number variable"),
                 tooltip: Util.lf("Changes the value of the variable by this amount"),
@@ -341,6 +488,15 @@ namespace pxt.blocks {
                 }
             },
             'variables_get': {
+                name: Util.lf("get the value of a variable"),
+                tooltip: Util.lf("Returns the value of this variable."),
+                url: '/blocks/variables',
+                category: 'variables',
+                block: {
+                    VARIABLES_GET_CREATE_SET: Util.lf("Create 'set %1'")
+                }
+            },
+            'variables_get_reporter': {
                 name: Util.lf("get the value of a variable"),
                 tooltip: Util.lf("Returns the value of this variable."),
                 url: '/blocks/variables',
@@ -383,8 +539,8 @@ namespace pxt.blocks {
                 category: 'arrays',
                 blockTextSearch: "LISTS_CREATE_WITH_INPUT_WITH",
                 block: {
-                    LISTS_CREATE_EMPTY_TITLE: Util.lf("create empty array"),
-                    LISTS_CREATE_WITH_INPUT_WITH: Util.lf("create array with"),
+                    LISTS_CREATE_EMPTY_TITLE: Util.lf("empty array"),
+                    LISTS_CREATE_WITH_INPUT_WITH: Util.lf("array of"),
                     LISTS_CREATE_WITH_CONTAINER_TITLE_ADD: Util.lf("array"),
                     LISTS_CREATE_WITH_ITEM_TITLE: Util.lf("value")
                 }
@@ -508,6 +664,24 @@ namespace pxt.blocks {
                 category: 'functions',
                 block: {
                     PROCEDURES_CALLNORETURN_TITLE: Util.lf("call function")
+                }
+            },
+            'function_definition': {
+                name: Util.lf("define the function"),
+                tooltip: Util.lf("Create a function."),
+                url: 'types/function/define',
+                category: 'functions',
+                block: {
+                    FUNCTIONS_EDIT_OPTION: Util.lf("Edit Function")
+                }
+            },
+            'function_call': {
+                name: Util.lf("call the function"),
+                tooltip: Util.lf("Call the user-defined function."),
+                url: 'types/function/call',
+                category: 'functions',
+                block: {
+                    FUNCTIONS_CALL_TITLE: Util.lf("call")
                 }
             }
         };

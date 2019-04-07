@@ -2,8 +2,53 @@
 /// <reference path="../built/pxtlib.d.ts" />
 
 namespace pxt.blocks {
+
+    /**
+     * Converts a DOM into workspace without triggering any Blockly event. Returns the new block ids
+     * @param dom
+     * @param workspace
+     */
+    export function domToWorkspaceNoEvents(dom: Element, workspace: Blockly.Workspace): string[] {
+        pxt.tickEvent(`blocks.domtow`)
+        try {
+            Blockly.Events.disable();
+            const newBlockIds = Blockly.Xml.domToWorkspace(dom, workspace);
+            applyMetaComments(workspace);
+            return newBlockIds;
+        } finally {
+            Blockly.Events.enable();
+        }
+    }
+
+    function applyMetaComments(workspace: Blockly.Workspace) {
+        // process meta comments
+        // @highlight -> highlight block
+        workspace.getAllBlocks()
+            .filter(b => !!b.comment && b.comment instanceof Blockly.Comment)
+            .forEach(b => {
+                const c = (<Blockly.Comment>b.comment).getText();
+                if (/@highlight/.test(c)) {
+                    const cc = c.replace(/@highlight/g, '').trim();
+                    b.setCommentText(cc || null);
+                    (workspace as Blockly.WorkspaceSvg).highlightBlock(b.id)
+                }
+            });
+    }
+
+    export function clearWithoutEvents(workspace: Blockly.Workspace) {
+        pxt.tickEvent(`blocks.clear`)
+        if (!workspace) return;
+        try {
+            Blockly.Events.disable();
+            workspace.clear();
+            workspace.clearUndo();
+        } finally {
+            Blockly.Events.enable();
+        }
+    }
+
     export function saveWorkspaceXml(ws: Blockly.Workspace): string {
-        let xml = Blockly.Xml.workspaceToDom(ws);
+        let xml = Blockly.Xml.workspaceToDom(ws, true);
         let text = Blockly.Xml.domToPrettyText(xml);
         return text;
     }
@@ -23,11 +68,11 @@ namespace pxt.blocks {
         return getChildrenWithAttr(parent, "block", "type", type);
     }
 
-    export function getChildrenWithAttr(parent:  Document | Element, tag: string, attr: string, value: string) {
+    export function getChildrenWithAttr(parent: Document | Element, tag: string, attr: string, value: string) {
         return Util.toArray(parent.getElementsByTagName(tag)).filter(b => b.getAttribute(attr) === value);
     }
 
-    export function getFirstChildWithAttr(parent:  Document | Element, tag: string, attr: string, value: string) {
+    export function getFirstChildWithAttr(parent: Document | Element, tag: string, attr: string, value: string) {
         const res = getChildrenWithAttr(parent, tag, attr, value);
         return res.length ? res[0] : undefined;
     }
@@ -36,10 +81,10 @@ namespace pxt.blocks {
      * Loads the xml into a off-screen workspace (not suitable for size computations)
      */
     export function loadWorkspaceXml(xml: string, skipReport = false) {
-        const workspace = new Blockly.Workspace();
+        const workspace = new Blockly.Workspace() as Blockly.WorkspaceSvg;
         try {
             const dom = Blockly.Xml.textToDom(xml);
-            Blockly.Xml.domToWorkspace(dom, workspace);
+            pxt.blocks.domToWorkspaceNoEvents(dom, workspace);
             return workspace;
         } catch (e) {
             if (!skipReport)
@@ -58,8 +103,7 @@ namespace pxt.blocks {
 
         let newnodes: Element[] = [];
 
-        const blocks: Map<pxtc.SymbolInfo> = {};
-        info.blocks.forEach(b => blocks[b.attributes.blockId] = b);
+        const blocks: Map<pxtc.SymbolInfo> = info.blocksById;
 
         // walk top level blocks
         let node = dom.firstElementChild;
@@ -103,13 +147,23 @@ namespace pxt.blocks {
         newnodes.forEach(n => dom.appendChild(n));
     }
 
-    export function importXml(xml: string, info: pxtc.BlocksInfo, skipReport = false): string {
+    /**
+     * This callback is populated from the editor extension result.
+     * Allows a target to provide version specific blockly updates
+     */
+    export let extensionBlocklyPatch: (pkgTargetVersion: string, dom: Element) => void;
+
+    export function importXml(pkgTargetVersion: string, xml: string, info: pxtc.BlocksInfo, skipReport = false): string {
         try {
+            // If it's the first project we're importing in the session, Blockly is not initialized
+            // and blocks haven't been injected yet
+            pxt.blocks.initializeAndInject(info);
+
             const parser = new DOMParser();
             const doc = parser.parseFromString(xml, "application/xml");
 
-            if (pxt.appTarget.compile) {
-                const upgrades = pxt.appTarget.compile.upgrades || [];
+            const upgrades = pxt.patching.computePatches(pkgTargetVersion);
+            if (upgrades) {
                 // patch block types
                 upgrades.filter(up => up.type == "blockId")
                     .forEach(up => Object.keys(up.map).forEach(type => {
@@ -137,12 +191,12 @@ namespace pxt.blocks {
 
             // build upgrade map
             const enums: Map<string> = {};
-            for (let k in info.apis.byQName) {
+            Object.keys(info.apis.byQName).forEach(k => {
                 let api = info.apis.byQName[k];
                 if (api.kind == pxtc.SymbolKind.EnumMember)
                     enums[api.namespace + '.' + (api.attributes.blockImportId || api.attributes.block || api.attributes.blockId || api.name)]
                         = api.namespace + '.' + api.name;
-            }
+            })
 
             // walk through blocks and patch enums
             const blocks = doc.getElementsByTagName("block");
@@ -151,6 +205,10 @@ namespace pxt.blocks {
 
             // patch floating blocks
             patchFloatingBlocks(doc.documentElement, info);
+
+            // apply extension patches
+            if (pxt.blocks.extensionBlocklyPatch)
+                pxt.blocks.extensionBlocklyPatch(pkgTargetVersion, doc.documentElement);
 
             // serialize and return
             return new XMLSerializer().serializeToString(doc);
@@ -184,16 +242,5 @@ namespace pxt.blocks {
                   */
             }
         })
-    }
-
-    /**
-     * Convert blockly hue to rgb
-     */
-    export function convertColour(colour: string): string {
-        let hue = parseInt(colour);
-        if (!isNaN(hue)) {
-            return Blockly.hueToRgb(hue);
-        }
-        return colour;
     }
 }

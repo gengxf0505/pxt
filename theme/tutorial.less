@@ -84,7 +84,7 @@ body#docs.tutorial {
     position: relative;
     padding: 0;
     border: 0;
-    border-radius: 5px 0px 0px 5px;
+    border-radius: 0px;
     background: @tutorialSegmentBackground;
 }
 
@@ -116,13 +116,12 @@ body#docs.tutorial {
 #tutorialcard .tutorialmessage .content {
     width: 100%;
     font-size: 12pt;
-    height: 3.5rem;
-    margin-bottom: 1rem;
+    height: 4rem;
     overflow: auto;
     cursor:pointer;
 }
 #tutorialcard .tutorialmessage .content p {
-    line-height: 27px !important;
+    line-height: 30px !important;
     color: @tutorialSegmentColor;
 }
 
@@ -166,13 +165,23 @@ i.icon.avatar-image {
     background-image: @avatarImage;
 }
 
+/* Tutorial blocks */
+
+.hintdialog .ui.segment .blocklyPreview {
+    width: 100%;
+    @media only screen and (min-height: 400px) {
+        max-height: 50vh;
+    }
+}
+
+
 /******************************
     Hint button
 ******************************/
 
 #tutorialcard .ui.button.hintbutton {
     position: absolute;
-    bottom: 2rem; 
+    bottom: 2rem;
     left: 4rem;
     font-size: 0.8rem;
     border-radius: 0.28571429rem;
@@ -204,21 +213,17 @@ span.docs.inlinebutton {
     border-radius: 0.2rem;
     white-space: nowrap;
     background-color: @primaryColor;
-    border: 1px solid lighten(@primaryColor, 20%);
     color: @white;
 }
 
 span.docs.inlineblock {
-    padding: 0.10rem 0.3rem;
-    border-radius: 0.3rem;
+    padding: 0.05rem .2rem;
+    border-radius: .2rem;
     white-space: nowrap;
     background-color: @inlineBlockColor;
-    border: 1px solid darken(@inlineBlockColor, 0.2);
     color: @white;
-}
-
-.tutorialmessage code, .tutorialmessage pre {
-    font-weight: bold;
+    font-family: @blocklyFont !important;
+    font-size: 1em !important;
 }
 
 code.lang-filterblocks {
@@ -234,6 +239,13 @@ code.lang-filterblocks {
     line-height: 25px;
 }
 
+.ui.modal.hintdialog {
+    .ui.segment {
+        display: flex;
+        min-height: 100px;
+    }
+}
+
 
 /*******************************
         Media Adjustments
@@ -242,13 +254,6 @@ code.lang-filterblocks {
 
 /* > Small Monitor */
 @media only screen and (min-width: @computerBreakpoint) {
-    /* Hide the editor toolbor in tutorial mode */
-    .tutorial #editortools  {
-        background: transparent;
-    }
-    .tutorial #maineditor > div.full-abs {
-        bottom: 0;
-    }
 }
 
 /* Large Monitor */

@@ -1,9 +1,9 @@
 # Microsoft MakeCode
 
-* [Try it live!](https://makecode.com)
+* [Try out the editors in your browser...](https://makecode.com)
 
-[![Join the chat at https://gitter.im/makecode-community/Lobby](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/makecode-community/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
-[![Build Status](https://travis-ci.org/Microsoft/pxt.svg?branch=master)](https://travis-ci.org/Microsoft/pxt)
+[![Build Status](https://travis-ci.org/Microsoft/pxt.svg?branch=master)](https://travis-ci.org/Microsoft/pxt) 
+[![Community Discord](https://img.shields.io/discord/448979533891371018.svg)](https://aka.ms/makecodecommunity)
 
 Microsoft MakeCode is based on the open source project [Microsoft Programming Experience Toolkit (PXT)](https://github.com/Microsoft/pxt). ``Microsoft MakeCode`` is the name in the user-facing editors, ``PXT`` is used in all the GitHub sources.
 
@@ -56,16 +56,13 @@ If you run `npm i` afterwards (in either the target or pxt), you might need to r
 
 ## Build
 
-First, install [Node](https://nodejs.org/en/): minimum version 8. Then install the following:
-```
-npm install -g jake
-```
+First, install [Node](https://nodejs.org/en/): minimum version 8. 
 
 To build the PXT command line tools:
 
 ```
 npm install
-jake
+npm run build
 ```
 
 Then install the `pxt` command line tool (only need to do it once):
@@ -78,10 +75,6 @@ After this you can run `pxt` from anywhere within the build tree.
 
 To start the local web server, run `pxt serve` from within the root
 of an app target (e.g. pxt-microbit). PXT will open the editor in your default web browser.
-
-Alternatively, if you clone your pxt and pxt-microbit directories next to each
-other, you can serve your local pxt-microbit repo from within the pxt repo by
-running `jake serve`.
 
 ### Icons
 
@@ -100,12 +93,16 @@ svgo svgicons/myicon.svg
 ## Tests
 
 The tests are located in the `tests/` subdirectory and are a combination of node and
-browser tests. To execute them, run `jake test` in the root directory.
+browser tests. To execute them, run `npm run test:all` in the root directory.
 
 ## License
 
-MIT
+[MIT License](https://github.com/Microsoft/pxt/blob/master/LICENSE)
 
 ## Code of Conduct
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+
+## Contact Us
+
+[Get in touch](https://makecode.com/contact)

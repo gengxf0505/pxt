@@ -6,6 +6,7 @@ webapp/public/closure-library
 node_modules
 *.sw?
 built
+temp
 packaged
 gh-pages
 /typings
@@ -23,3 +24,4 @@ paper.dvi
 paper.fls
 paper.fdb_latexmk
 paper.aux
+tests/**/*.local.*

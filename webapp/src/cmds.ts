@@ -1,11 +1,13 @@
 /// <reference path="../../built/pxtlib.d.ts"/>
 import * as core from "./core";
+import * as electron from "./electron";
 import * as pkg from "./package";
 import * as hidbridge from "./hidbridge";
+import * as webusb from "./webusb";
 import Cloud = pxt.Cloud;
 
 function browserDownloadAsync(text: string, name: string, contentType: string): Promise<void> {
-    let url = pxt.BrowserUtils.browserDownloadBinText(
+    pxt.BrowserUtils.browserDownloadBinText(
         text,
         name,
         contentType,
@@ -45,12 +47,7 @@ export function browserDownloadDeployCoreAsync(resp: pxtc.CompileResult): Promis
     }
 
     if (!resp.success) {
-        return core.confirmAsync({
-            header: lf("Compilation failed"),
-            body: lf("Ooops, looks like there are errors in your program."),
-            hideAgree: true,
-            disagreeLbl: lf("Close")
-        }).then(() => { });
+        return Promise.resolve();
     }
 
     if (resp.saveOnly && userContext) return pxt.commands.showUploadInstructionsAsync(fn, url, core.confirmAsync); // save does the same as download as far iOS is concerned
@@ -87,7 +84,7 @@ function showUploadInstructionsAsync(fn: string, url: string, confirmAsync: (opt
         buttons: [downloadAgain ? {
             label: userDownload ? lf("Download") : fn,
             icon: "download",
-            class: `${userDownload ? "primary" : "lightgrey"} focused`,
+            class: `${userDownload ? "primary" : "lightgrey"}`,
             url,
             fileName: fn
         } : undefined, docUrl ? {
@@ -100,156 +97,107 @@ function showUploadInstructionsAsync(fn: string, url: string, confirmAsync: (opt
     }).then(() => { });
 }
 
-function hidDeployCoreAsync(resp: pxtc.CompileResult): Promise<void> {
+export function nativeHostPostMessageFunction(): (msg: pxt.editor.NativeHostMessage) => void {
+    const webkit = (<any>window).webkit;
+    if (webkit
+        && webkit.messageHandlers
+        && webkit.messageHandlers.host
+        && webkit.messageHandlers.host.postMessage)
+        return msg => webkit.messageHandlers.host.postMessage(msg);
+    const android = (<any>window).android;
+    if (android && android.postMessage)
+        return msg => android.postMessage(JSON.stringify(msg));
+    return undefined;
+}
+
+export function isNativeHost(): boolean {
+    return !!nativeHostPostMessageFunction();
+}
+
+function nativeHostDeployCoreAsync(resp: pxtc.CompileResult): Promise<void> {
+    pxt.debug(`native deploy`)
+    core.infoNotification(lf("Flashing device..."));
+    const out = resp.outfiles[pxt.outputName()];
+    const nativePostMessage = nativeHostPostMessageFunction();
+    nativePostMessage(<pxt.editor.NativeHostMessage>{
+        name: resp.downloadFileBaseName,
+        download: out
+    })
+    return Promise.resolve();
+}
+
+function nativeHostSaveCoreAsync(resp: pxtc.CompileResult): Promise<void> {
+    pxt.debug(`native save`)
+    core.infoNotification(lf("Saving file..."));
+    const out = resp.outfiles[pxt.outputName()]
+    const nativePostMessage = nativeHostPostMessageFunction();
+    nativePostMessage(<pxt.editor.NativeHostMessage>{
+        name: resp.downloadFileBaseName,
+        save: out
+    })
+    return Promise.resolve();
+}
+
+export function hidDeployCoreAsync(resp: pxtc.CompileResult, d?: pxt.commands.DeployOptions): Promise<void> {
     pxt.tickEvent(`hid.deploy`)
     // error message handled in browser download
     if (!resp.success)
         return browserDownloadDeployCoreAsync(resp);
     core.infoNotification(lf("Downloading..."));
     let f = resp.outfiles[pxtc.BINARY_UF2]
-    let blocks = pxtc.UF2.parseFile(Util.stringToUint8Array(atob(f)))
+    let blocks = pxtc.UF2.parseFile(pxt.Util.stringToUint8Array(atob(f)))
     return hidbridge.initAsync()
         .then(dev => dev.reflashAsync(blocks))
-}
-
-let askPairingCount = 0;
-function askWebUSBPairAsync(resp: pxtc.CompileResult): Promise<void> {
-    pxt.tickEvent(`webusb.askpair`);
-    askPairingCount++;
-    if (askPairingCount > 3) { // looks like this is not working, don't ask anymore
-        pxt.tickEvent(`webusb.askpaircancel`);
-        return browserDownloadDeployCoreAsync(resp);
-    }
-
-    const boardName = pxt.appTarget.appTheme.boardName || lf("device");
-    return core.confirmAsync({
-        header: lf("No device detected..."),
-        htmlBody: `
-<p><strong>${lf("Do you want to pair your {0} to the editor?", boardName)}</strong>
-${lf("You will get instant downloads and data logging.")}</p>
-<p class="ui font small">The pairing experience is a one-time process.</p>
-        `,
-    }).then(r => r ? showFirmwareUpdateInstructionsAsync(resp) : browserDownloadDeployCoreAsync(resp));
-}
-
-function showFirmwareUpdateInstructionsAsync(resp: pxtc.CompileResult): Promise<void> {
-    return pxt.targetConfigAsync()
-        .then(config => {
-            const firmwareUrl = (config.firmwareUrls || {})[pxt.appTarget.simulator.boardDefinition.id];
-            if (!firmwareUrl) // skip firmware update
-                return showWebUSBPairingInstructionsAsync(resp)
-            pxt.tickEvent(`webusb.upgradefirmware`);
-            const boardName = pxt.appTarget.appTheme.boardName || lf("device");
-            const driveName = pxt.appTarget.appTheme.driveDisplayName || "DRIVE";
-            const htmlBody = `
-    <div class="ui three column grid stackable">
-        <div class="column">
-            <div class="ui">
-                <div class="content">
-                    <div class="description">
-                        <span class="ui yellow circular label">1</span>
-                        <strong>${lf("Connect {0} to computer with USB cable", boardName)}</strong>
-                        <br/>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="column">
-            <div class="ui">
-                <div class="content">
-                    <div class="description">
-                        <span class="ui blue circular label">2</span>
-                        <strong>${lf("Download the latest firmware")}</strong>
-                        <br/>
-                        <a href="${firmwareUrl}" target="_blank">${lf("Click here to update to latest firmware")}</a>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="column">
-            <div class="ui">
-                <div class="content">
-                    <div class="description">
-                        <span class="ui blue circular label">3</span>
-                        ${lf("Move the .uf2 file to your board")}
-                        <br/>
-                        ${lf("Locate the downloaded .uf2 file and drag it to the {0} drive", driveName)}
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>`;
-            return core.confirmAsync({
-                header: lf("Upgrade firmware"),
-                htmlBody,
-                agreeLbl: lf("Upgraded!")
-            })
-                .then(r => r ? showWebUSBPairingInstructionsAsync(resp) : browserDownloadDeployCoreAsync(resp));
+        .catch((e) => {
+            const troubleshootDoc = pxt.appTarget && pxt.appTarget.appTheme && pxt.appTarget.appTheme.appFlashingTroubleshoot;
+            if (e.type === "repairbootloader") {
+                return pairBootloaderAsync()
+                    .then(() => hidDeployCoreAsync(resp))
+            }
+            if (e.type === "devicenotfound" && d.reportDeviceNotFoundAsync && !!troubleshootDoc) {
+                pxt.tickEvent("hid.flash.devicenotfound");
+                return d.reportDeviceNotFoundAsync(troubleshootDoc, resp);
+            } else {
+                return pxt.commands.saveOnlyAsync(resp);
+            }
         });
 }
 
-function showWebUSBPairingInstructionsAsync(resp: pxtc.CompileResult): Promise<void> {
-    pxt.tickEvent(`webusb.pair`);
-    const boardName = pxt.appTarget.appTheme.boardName || lf("device");
-    const htmlBody = `
-    <div class="ui three column grid stackable">
-        <div class="column">
-            <div class="ui">
-                <div class="content">
-                    <div class="description">
-                        <span class="ui yellow circular label">1</span>
-                        <strong>${lf("Connect {0} to computer with USB cable", boardName)}</strong>
-                        <br/>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="column">
-            <div class="ui">
-                <div class="content">
-                    <div class="description">
-                        <span class="ui blue circular label">2</span>
-                        ${lf("Select the device in the pairing dialog")}
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="column">
-            <div class="ui">
-                <div class="content">
-                    <div class="description">
-                        <span class="ui blue circular label">3</span>
-                        ${lf("Press \"Connect\"")}
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>`;
-
+function pairBootloaderAsync(): Promise<void> {
     return core.confirmAsync({
-        header: lf("Pair your {0}", boardName),
-        agreeLbl: lf("Let's pair it!"),
-        htmlBody,
-    }).then(r => {
-        pxt.usb.pairAsync()
-            .then(() => {
-                pxt.tickEvent(`webusb.pair.success`);
-                return hidDeployCoreAsync(resp)
-            })
-            .catch(e => browserDownloadDeployCoreAsync(resp));
-    })
+        header: lf("Just one more time..."),
+        body: lf("You need to pair the board again, now in bootloader mode. We know..."),
+        agreeLbl: lf("Ok, pair!")
+    }).then(r => pxt.usb.pairAsync())
 }
 
-function webUsbDeployCoreAsync(resp: pxtc.CompileResult): Promise<void> {
-    pxt.tickEvent(`webusb.deploy`)
-    return hidDeployCoreAsync(resp)
-        .catch(e => askWebUSBPairAsync(resp));
+function winrtDeployCoreAsync(r: pxtc.CompileResult, d: pxt.commands.DeployOptions): Promise<void> {
+    return hidDeployCoreAsync(r, d)
+        .timeout(20000)
+        .catch((e) => {
+            return hidbridge.disconnectWrapperAsync()
+                .catch((e) => {
+                    // Best effort disconnect; at this point we don't even know the state of the device
+                    pxt.reportException(e);
+                })
+                .then(() => {
+                    return core.confirmAsync({
+                        header: lf("Something went wrong..."),
+                        body: lf("Flashing your {0} took too long. Please disconnect your {0} from your computer and try reconnecting it.", pxt.appTarget.appTheme.boardName || lf("device")),
+                        disagreeLbl: lf("Ok"),
+                        hideAgree: true
+                    });
+                })
+                .then(() => {
+                    return pxt.commands.saveOnlyAsync(r);
+                });
+        });
 }
 
 function localhostDeployCoreAsync(resp: pxtc.CompileResult): Promise<void> {
     pxt.debug('local deployment...');
     core.infoNotification(lf("Uploading .hex file..."));
-    let deploy = () => Util.requestAsync({
+    let deploy = () => pxt.Util.requestAsync({
         url: "/api/deploy",
         headers: { "Authorization": Cloud.localToken },
         method: "POST",
@@ -266,28 +214,41 @@ function localhostDeployCoreAsync(resp: pxtc.CompileResult): Promise<void> {
     return deploy()
 }
 
-export function initCommandsAsync(): Promise<void> {
+export function init(): void {
+    pxt.onAppTargetChanged = init;
     pxt.commands.browserDownloadAsync = browserDownloadAsync;
     pxt.commands.saveOnlyAsync = browserDownloadDeployCoreAsync;
     pxt.commands.showUploadInstructionsAsync = showUploadInstructionsAsync;
     const forceHexDownload = /forceHexDownload/i.test(window.location.href);
 
-    if (pxt.usb.isAvailable() && (pxt.appTarget.compile.webUSB || /webusb=1/i.test(window.location.href))) {
-        pxt.log(`enabled webusb`)
-        pxt.usb.setEnabled(true)
-        pxt.HF2.mkPacketIOAsync = pxt.usb.mkPacketIOAsync
+    if (pxt.usb.isAvailable() && pxt.appTarget.compile.webUSB) {
+        pxt.debug(`enabled webusb`);
+        pxt.usb.setEnabled(true);
+        pxt.HF2.mkPacketIOAsync = pxt.usb.mkPacketIOAsync;
+    } else {
+        pxt.debug(`disabled webusb`);
+        pxt.usb.setEnabled(false);
+        pxt.HF2.mkPacketIOAsync = hidbridge.mkBridgeAsync;
     }
 
-    if (pxt.usb.isEnabled && pxt.appTarget.compile.useUF2) {
-        pxt.commands.deployCoreAsync = webUsbDeployCoreAsync;
+    const shouldUseWebUSB = pxt.usb.isEnabled && pxt.appTarget.compile.useUF2;
+    if (isNativeHost()) {
+        pxt.debug(`deploy: webkit host`);
+        pxt.commands.deployCoreAsync = nativeHostDeployCoreAsync;
+        pxt.commands.saveOnlyAsync = nativeHostSaveCoreAsync;
+    } else if (shouldUseWebUSB && pxt.appTarget.appTheme.autoWebUSBDownload) {
+        pxt.debug(`deploy: webusb`);
+        pxt.commands.deployCoreAsync = webusb.webUsbDeployCoreAsync;
     } else if (pxt.winrt.isWinRT()) { // windows app
         if (pxt.appTarget.serial && pxt.appTarget.serial.useHF2) {
+            pxt.debug(`deploy: winrt`);
             pxt.winrt.initWinrtHid(() => hidbridge.initAsync(true).then(() => { }), () => hidbridge.disconnectWrapperAsync());
             pxt.HF2.mkPacketIOAsync = pxt.winrt.mkPacketIOAsync;
-            pxt.commands.deployCoreAsync = hidDeployCoreAsync;
+            pxt.commands.deployCoreAsync = winrtDeployCoreAsync;
         } else {
             // If we're not using HF2, then the target is using their own deploy logic in extension.ts, so don't use
             // the wrapper callbacks
+            pxt.debug(`deploy: winrt + custom deploy`);
             pxt.winrt.initWinrtHid(null, null);
             if (pxt.appTarget.serial && pxt.appTarget.serial.rawHID) {
                 pxt.HF2.mkPacketIOAsync = pxt.winrt.mkPacketIOAsync;
@@ -302,15 +263,20 @@ export function initCommandsAsync(): Promise<void> {
                         core.infoNotification(lf("file saved!"));
                     }
                 })
-                .catch(() => core.errorNotification(lf("saving file failed...")));
+                .catch((e) => core.errorNotification(lf("saving file failed...")));
         };
-    } else if (hidbridge.shouldUse() && !pxt.appTarget.serial.noDeploy && !forceHexDownload) {
+    } else if (pxt.BrowserUtils.isPxtElectron()) {
+        pxt.debug(`deploy: electron`);
+        pxt.commands.deployCoreAsync = electron.driveDeployAsync;
+        pxt.commands.electronDeployAsync = electron.driveDeployAsync;
+    } else if (!shouldUseWebUSB && hidbridge.shouldUse() && !pxt.appTarget.serial.noDeploy && !forceHexDownload) {
+        pxt.debug(`deploy: hid`);
         pxt.commands.deployCoreAsync = hidDeployCoreAsync;
-    } else if (Cloud.isLocalHost() && Cloud.localToken && !forceHexDownload) { // local node.js
+    } else if (pxt.BrowserUtils.isLocalHost() && Cloud.localToken && !forceHexDownload) { // local node.js
+        pxt.debug(`deploy: localhost`);
         pxt.commands.deployCoreAsync = localhostDeployCoreAsync;
     } else { // in browser
+        pxt.debug(`deploy: browser`);
         pxt.commands.deployCoreAsync = browserDownloadDeployCoreAsync;
     }
-
-    return Promise.resolve();
 }

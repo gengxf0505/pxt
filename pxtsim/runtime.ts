@@ -1,15 +1,43 @@
 /// <reference path="../localtypings/pxtparts.d.ts"/>
 
 namespace pxsim {
+    const MIN_MESSAGE_WAIT_MS = 200;
+    let tracePauseMs = 0;
     export namespace U {
-        export function addClass(el: HTMLElement, cls: string) {
-            if (el.classList) el.classList.add(cls);
-            else if (el.className.indexOf(cls) < 0) el.className += ' ' + cls;
+        export function addClass(element: HTMLElement, classes: string) {
+            if (!element) return;
+            if (!classes || classes.length == 0) return;
+            function addSingleClass(el: HTMLElement, singleCls: string) {
+                if (el.classList) el.classList.add(singleCls);
+                else if (el.className.indexOf(singleCls) < 0) el.className += ' ' + singleCls;
+            }
+            classes.split(' ').forEach((cls) => {
+                addSingleClass(element, cls);
+            });
         }
 
-        export function removeClass(el: HTMLElement, cls: string) {
-            if (el.classList) el.classList.remove(cls);
-            else el.className = el.className.replace(cls, '').replace(/\s{2,}/, ' ');
+        export function removeClass(element: HTMLElement, classes: string) {
+            if (!element) return;
+            if (!classes || classes.length == 0) return;
+            function removeSingleClass(el: HTMLElement, singleCls: string) {
+                if (el.classList) el.classList.remove(singleCls);
+                else el.className = el.className.replace(singleCls, '').replace(/\s{2,}/, ' ');
+            }
+            classes.split(' ').forEach((cls) => {
+                removeSingleClass(element, cls);
+            });
+        }
+
+        export function remove(element: Element) {
+            element.parentElement.removeChild(element);
+        }
+
+        export function removeChildren(element: Element) {
+            while (element.firstChild) element.removeChild(element.firstChild);
+        }
+
+        export function clear(element: Element) {
+            removeChildren(element);
         }
 
         export function assert(cond: boolean, msg = "Assertion failed") {
@@ -36,8 +64,83 @@ namespace pxsim {
             return Date.now();
         }
 
+        let perf: () => number
+
+        // current time in microseconds
+        export function perfNowUs(): number {
+            if (!perf)
+                perf = typeof performance != "undefined" ?
+                    performance.now.bind(performance) ||
+                    (performance as any).moznow.bind(performance) ||
+                    (performance as any).msNow.bind(performance) ||
+                    (performance as any).webkitNow.bind(performance) ||
+                    (performance as any).oNow.bind(performance) :
+                    Date.now;
+            return perf() * 1000;
+        }
+
         export function nextTick(f: () => void) {
             (<any>Promise)._async._schedule(f)
+        }
+
+        // this will take lower 8 bits from each character
+        export function stringToUint8Array(input: string) {
+            let len = input.length;
+            let res = new Uint8Array(len)
+            for (let i = 0; i < len; ++i)
+                res[i] = input.charCodeAt(i) & 0xff;
+            return res;
+        }
+
+        export function uint8ArrayToString(input: ArrayLike<number>) {
+            let len = input.length;
+            let res = ""
+            for (let i = 0; i < len; ++i)
+                res += String.fromCharCode(input[i]);
+            return res;
+        }
+
+        export function fromUTF8(binstr: string) {
+            if (!binstr) return ""
+
+            // escape function is deprecated
+            let escaped = ""
+            for (let i = 0; i < binstr.length; ++i) {
+                let k = binstr.charCodeAt(i) & 0xff
+                if (k == 37 || k > 0x7f) {
+                    escaped += "%" + k.toString(16);
+                } else {
+                    escaped += binstr.charAt(i)
+                }
+            }
+
+            // decodeURIComponent does the actual UTF8 decoding
+            return decodeURIComponent(escaped)
+        }
+
+        export function toUTF8(str: string, cesu8?: boolean) {
+            let res = "";
+            if (!str) return res;
+            for (let i = 0; i < str.length; ++i) {
+                let code = str.charCodeAt(i);
+                if (code <= 0x7f) res += str.charAt(i);
+                else if (code <= 0x7ff) {
+                    res += String.fromCharCode(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+                } else {
+                    if (!cesu8 && 0xd800 <= code && code <= 0xdbff) {
+                        let next = str.charCodeAt(++i);
+                        if (!isNaN(next))
+                            code = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
+                    }
+
+                    if (code <= 0xffff)
+                        res += String.fromCharCode(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+                    else
+                        res += String.fromCharCode(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+                }
+
+            }
+            return res;
         }
     }
 
@@ -64,41 +167,83 @@ namespace pxsim {
     }
 
     interface LR {
-        caller: LR;
         retPC: number;
         currFn: LabelFn;
         baseSP: number;
         finalCallback?: ResumeFn;
     }
 
+    interface SerialMessage {
+        data: string;
+        time: number;
+    }
+
     export let runtime: Runtime;
     export function getResume() { return runtime.getResume() }
+
+    export type MessageListener = (msg: SimulatorMessage) => void;
 
     const SERIAL_BUFFER_LENGTH = 16;
     export class BaseBoard {
         public runOptions: SimulatorRunMessage;
+        public messageListeners: MessageListener[] = [];
 
         public updateView() { }
-        public receiveMessage(msg: SimulatorMessage) { }
+        public receiveMessage(msg: SimulatorMessage) {
+            this.dispatchMessage(msg);
+        }
+        private dispatchMessage(msg: SimulatorMessage) {
+            for (const listener of this.messageListeners)
+                listener(msg)
+        }
+        public addMessageListener(listener: MessageListener) {
+            this.messageListeners.push(listener);
+        }
+
         public initAsync(msg: SimulatorRunMessage): Promise<void> {
             this.runOptions = msg;
             return Promise.resolve()
         }
+        public onDebuggerResume() { }
+        public screenshotAsync(width?: number): Promise<ImageData> {
+            return Promise.resolve(undefined);
+        }
         public kill() { }
 
         protected serialOutBuffer: string = '';
-        public writeSerial(s: string) {
-            if (!s) return
+        private messages: SerialMessage[] = [];
+        private serialTimeout: number;
+        private lastSerialTime = 0;
 
+        public writeSerial(s: string) {
             this.serialOutBuffer += s;
             if (/\n/.test(this.serialOutBuffer) || this.serialOutBuffer.length > SERIAL_BUFFER_LENGTH) {
-                Runtime.postMessage(<SimulatorSerialMessage>{
-                    type: 'serial',
-                    data: this.serialOutBuffer,
-                    id: runtime.id,
-                    sim: true
-                })
+                this.messages.push({
+                    time: Date.now(),
+                    data: this.serialOutBuffer
+                });
+                this.debouncedPostAll();
                 this.serialOutBuffer = '';
+            }
+        }
+
+        private debouncedPostAll = () => {
+            const nowtime = Date.now();
+            if (nowtime - this.lastSerialTime > MIN_MESSAGE_WAIT_MS) {
+                clearTimeout(this.serialTimeout);
+                if (this.messages.length) {
+                    Runtime.postMessage(<any>{
+                        type: 'bulkserial',
+                        data: this.messages,
+                        id: runtime.id,
+                        sim: true
+                    })
+                    this.messages = [];
+                    this.lastSerialTime = nowtime;
+                }
+            }
+            else {
+                this.serialTimeout = setTimeout(this.debouncedPostAll, 50);
             }
         }
     }
@@ -135,7 +280,7 @@ namespace pxsim {
 
         kill() {
             super.kill();
-            AudioContextManager.stop();
+            AudioContextManager.stopAll();
         }
     }
 
@@ -164,16 +309,23 @@ namespace pxsim {
         }
     }
 
+    export type EventValueToActionArgs<T> = (value: T) => any[];
+
+    enum LogType {
+        UserSet, BackAdd, BackRemove
+    }
+
     export class EventQueue<T> {
         max: number = 5;
         events: T[] = [];
         private awaiters: ((v?: any) => void)[] = [];
-        private mHandler: RefAction;
         private lock: boolean;
+        private _handlers: RefAction[] = [];
+        private _addRemoveLog: { act: RefAction, log: LogType }[] = [];
 
-        constructor(public runtime: Runtime) { }
+        constructor(public runtime: Runtime, private valueToArgs?: EventValueToActionArgs<T>) { }
 
-        public push(e: T, notifyOne: boolean) {
+        public push(e: T, notifyOne: boolean): Promise<void> {
             if (this.awaiters.length > 0) {
                 if (notifyOne) {
                     const aw = this.awaiters.shift();
@@ -184,43 +336,82 @@ namespace pxsim {
                     aws.forEach(aw => aw());
                 }
             }
-            if (!this.handler || this.events.length > this.max) return;
+            if (this.handlers.length == 0 || this.events.length > this.max)
+                return Promise.resolve()
 
             this.events.push(e)
 
-            // if this is the first event pushed - start processing
-            if (this.events.length == 1 && !this.lock)
-                this.poke();
+            // start processing, if not already processing
+            if (!this.lock)
+                return this.poke();
+            else
+                return Promise.resolve()
         }
 
-        private poke() {
+        private poke(): Promise<void> {
             this.lock = true;
-            let top = this.events.shift()
-            this.runtime.runFiberAsync(this.handler, top)
-                .done(() => {
-                    // we're done processing the current event, if there is still something left to do, do it
-                    if (this.events.length > 0) {
-                        this.poke();
-                    }
-                    else {
-                        this.lock = false;
-                    }
+            let events = this.events;
+            // all events will be processed by concurrent promisified code below, so start afresh
+            this.events = []
+            // in order semantics for events and handlers
+            return Promise.each(events, (value) => {
+                return Promise.each(this.handlers, (handler) => {
+                    return this.runtime.runFiberAsync(handler, ...(this.valueToArgs ? this.valueToArgs(value) : [value]))
                 })
+            }).then(() => {
+                // if some events arrived while processing above then keep processing
+                if (this.events.length > 0) {
+                    return this.poke()
+                } else {
+                    this.lock = false
+                    // process the log (synchronous)
+                    this._addRemoveLog.forEach(l => {
+                        if (l.log === LogType.BackAdd) { this.addHandler(l.act) }
+                        else if (l.log === LogType.BackRemove) { this.removeHandler(l.act) }
+                        else this.setHandler(l.act)
+                    });
+                    this._addRemoveLog = [];
+                    return Promise.resolve()
+                }
+            })
         }
 
-        get handler() {
-            return this.mHandler;
+        get handlers() {
+            return this._handlers;
         }
 
-        set handler(a: RefAction) {
-            if (this.mHandler) {
-                pxtcore.decr(this.mHandler);
+        setHandler(a: RefAction) {
+            if (!this.lock) {
+                this._handlers.forEach(old => pxtcore.decr(old))
+                this._handlers = [a];
+                pxtcore.incr(a)
+            } else {
+                this._addRemoveLog.push({ act: a, log: LogType.UserSet });
             }
+        }
 
-            this.mHandler = a;
+        addHandler(a: RefAction) {
+            if (!this.lock) {
+                let index = this._handlers.indexOf(a)
+                // only add if new, just like CODAL
+                if (index == -1) {
+                    this._handlers.push(a);
+                    pxtcore.incr(a)
+                }
+            } else {
+                this._addRemoveLog.push({ act: a, log: LogType.BackAdd });
+            }
+        }
 
-            if (this.mHandler) {
-                pxtcore.incr(this.mHandler);
+        removeHandler(a: RefAction) {
+            if (!this.lock) {
+                let index = this._handlers.indexOf(a)
+                if (index != -1) {
+                    this._handlers.splice(index, 1)
+                    pxtcore.decr(a)
+                }
+            } else {
+                this._addRemoveLog.push({ act: a, log: LogType.BackRemove });
             }
         }
 
@@ -233,6 +424,28 @@ namespace pxsim {
     export let initCurrentRuntime: (msg: SimulatorRunMessage) => void = undefined;
     export let handleCustomMessage: (message: pxsim.SimulatorCustomMessage) => void = undefined;
 
+
+    function _leave(s: StackFrame, v: any): StackFrame {
+        s.parent.retval = v;
+        if (s.finalCallback)
+            s.finalCallback(v);
+        return s.parent
+    }
+
+    // wraps simulator code as STS code - useful for default event handlers
+    export function syntheticRefAction(f: (s: StackFrame) => any) {
+        return pxtcore.mkAction(0, s => _leave(s, f(s)))
+    }
+
+    export class TimeoutScheduled {
+        constructor(public id: number, public fn: Function, public totalRuntime: number, public timestampCall: number) { }
+    }
+
+    export class PausedTimeout {
+        constructor(public fn: Function, public timeRemaining: number) { }
+    }
+
+
     export class Runtime {
         public board: BaseBoard;
         numGlobals = 1000;
@@ -242,11 +455,29 @@ namespace pxsim {
 
         dead = false;
         running = false;
+        recording = false;
+        recordingTimer = 0;
+        recordingLastImageData: ImageData = undefined;
+        recordingWidth: number = undefined;
         startTime = 0;
+        startTimeUs = 0;
+        pausedTime = 0;
+        lastPauseTimestamp = 0;
         id: string;
         globals: any = {};
         currFrame: StackFrame;
         entry: LabelFn;
+        loopLock: Object = null;
+        loopLockWaitList: (() => void)[] = [];
+
+        timeoutsScheduled: TimeoutScheduled[] = []
+        timeoutsPausedOnBreakpoint: PausedTimeout[] = [];
+        pausedOnBreakpoint: boolean = false;
+
+        perfCounters: PerfCounter[]
+        perfOffset = 0
+        perfElapsed = 0
+        perfStack = 0
 
         public refCountingDebug = false;
         public refCounting = true;
@@ -267,13 +498,17 @@ namespace pxsim {
             return id;
         }
 
-        unregisterLiveObject(object: RefObject) {
-            U.assert(object.refcnt == 0, "ref count is not 0");
+        unregisterLiveObject(object: RefObject, keepAlive?: boolean) {
+            if (!keepAlive) U.assert(object.refcnt == 0, "ref count is not 0");
             delete this.liveRefObjs[object.id + ""]
         }
 
         runningTime(): number {
-            return U.now() - this.startTime;
+            return U.now() - this.startTime - this.pausedTime;
+        }
+
+        runningTimeUs(): number {
+            return 0xffffffff & ((U.perfNowUs() - this.startTimeUs) >> 0);
         }
 
         runFiberAsync(a: RefAction, arg0?: any, arg1?: any, arg2?: any) {
@@ -282,7 +517,7 @@ namespace pxsim {
                 U.nextTick(() => {
                     runtime = this;
                     this.setupTop(resolve)
-                    pxtcore.runAction3(a, arg0, arg1, arg2)
+                    pxtcore.runAction(a, [arg0, arg1, arg2])
                     decr(a) // if it's still running, action.run() has taken care of incrementing the counter
                 }))
         }
@@ -298,14 +533,96 @@ namespace pxsim {
             if (Runtime.messagePosted) Runtime.messagePosted(data);
         }
 
+        static postScreenshotAsync(opts?: SimulatorScreenshotMessage): Promise<void> {
+            const b = runtime && runtime.board;
+            const p = b
+                ? b.screenshotAsync().catch(e => {
+                    console.debug(`screenshot failed`);
+                    return undefined;
+                })
+                : Promise.resolve(undefined);
+            return p.then(img => Runtime.postMessage({
+                type: "screenshot",
+                data: img,
+                delay: opts && opts.delay
+            } as SimulatorScreenshotMessage));
+        }
+
+        static requestToggleRecording() {
+            const r = runtime;
+            if (!r) return;
+
+            Runtime.postMessage(<SimulatorRecorderMessage>{
+                type: "recorder",
+                action: r.recording ? "stop" : "start"
+            })
+        }
+
+        restart() {
+            this.kill();
+            setTimeout(() =>
+                pxsim.Runtime.postMessage(<pxsim.SimulatorCommandMessage>{
+                    type: "simulator",
+                    command: "restart"
+                }), 500);
+
+        }
+
         kill() {
             this.dead = true
             // TODO fix this
+            this.stopRecording();
             this.setRunning(false);
         }
 
         updateDisplay() {
-            this.board.updateView()
+            this.board.updateView();
+            this.postFrame();
+        }
+
+        startRecording(width?: number) {
+            if (this.recording || !this.running) return;
+
+            this.recording = true;
+            this.recordingTimer = setInterval(() => this.postFrame(), 66);
+            this.recordingLastImageData = undefined;
+            this.recordingWidth = width;
+        }
+
+        stopRecording() {
+            if (!this.recording) return;
+            if (this.recordingTimer) clearInterval(this.recordingTimer);
+            this.recording = false;
+            this.recordingTimer = 0;
+            this.recordingLastImageData = undefined;
+            this.recordingWidth = undefined;
+        }
+
+        postFrame() {
+            if (!this.recording || !this.running) return;
+            let time = pxsim.U.now();
+            this.board.screenshotAsync(this.recordingWidth)
+                .then(imageData => {
+                    // check for duplicate images
+                    if (this.recordingLastImageData && imageData
+                        && this.recordingLastImageData.data.byteLength == imageData.data.byteLength) {
+                        const d0 = this.recordingLastImageData.data;
+                        const d1 = imageData.data;
+                        const n = d0.byteLength;
+                        let i = 0;
+                        for (i = 0; i < n; ++i)
+                            if (d0[i] != d1[i])
+                                break;
+                        if (i == n) // same, don't send update
+                            return;
+                    }
+                    this.recordingLastImageData = imageData;
+                    Runtime.postMessage(<SimulatorScreenshotMessage>{
+                        type: "screenshot",
+                        data: imageData,
+                        time
+                    })
+                });
         }
 
         private numDisplayUpdates = 0;
@@ -325,9 +642,21 @@ namespace pxsim {
                 this.running = r;
                 if (this.running) {
                     this.startTime = U.now();
-                    Runtime.postMessage(<SimulatorStateMessage>{ type: 'status', runtimeid: this.id, state: 'running' });
+                    this.startTimeUs = U.perfNowUs();
+                    Runtime.postMessage(<SimulatorStateMessage>{
+                        type: 'status',
+                        frameid: Embed.frameid,
+                        runtimeid: this.id,
+                        state: 'running'
+                    });
                 } else {
-                    Runtime.postMessage(<SimulatorStateMessage>{ type: 'status', runtimeid: this.id, state: 'killed' });
+                    this.stopRecording();
+                    Runtime.postMessage(<SimulatorStateMessage>{
+                        type: 'status',
+                        frameid: Embed.frameid,
+                        runtimeid: this.id,
+                        state: 'killed'
+                    });
                 }
                 if (this.stateChanged) this.stateChanged();
             }
@@ -365,11 +694,11 @@ namespace pxsim {
             // ---
 
             let currResume: ResumeFn;
+            let dbgHeap: Map<any>;
             let dbgResume: ResumeFn;
             let breakFrame: StackFrame = null // for step-over
             let lastYield = Date.now()
             let __this = this
-            let tracePauseMs = 0;
 
             function oops(msg: string) {
                 throw new Error("sim error: " + msg)
@@ -381,17 +710,30 @@ namespace pxsim {
                 return leave(s, s.parent.retval)
             }
 
+            function flushLoopLock() {
+                while (__this.loopLockWaitList.length > 0 && !__this.loopLock) {
+                    let f = __this.loopLockWaitList.shift()
+                    f()
+                }
+            }
+
             function maybeYield(s: StackFrame, pc: number, r0: any): boolean {
+                __this.cleanScheduledExpired()
                 yieldSteps = yieldMaxSteps;
                 let now = Date.now()
                 if (now - lastYield >= 20) {
                     lastYield = now
                     s.pc = pc;
                     s.r0 = r0;
+                    let lock = new Object();
+                    __this.loopLock = lock;
                     let cont = () => {
                         if (__this.dead) return;
                         U.assert(s.pc == pc);
-                        return loop(s)
+                        U.assert(__this.loopLock === lock);
+                        __this.loopLock = null;
+                        loop(s)
+                        flushLoopLock()
                     }
                     //U.nextTick(cont)
                     setTimeout(cont, 5)
@@ -402,7 +744,8 @@ namespace pxsim {
 
             function setupDebugger(numBreakpoints: number) {
                 breakpoints = new Uint8Array(numBreakpoints)
-                breakAlways = true
+                // start running and let user put a breakpoint on start
+                // breakAlways = true
             }
 
             function isBreakFrame(s: StackFrame) {
@@ -414,15 +757,26 @@ namespace pxsim {
             }
 
             function breakpoint(s: StackFrame, retPC: number, brkId: number, r0: any): StackFrame {
+                let lock = {}
+                __this.loopLock = lock;
                 U.assert(!dbgResume)
+                U.assert(!dbgHeap)
 
                 s.pc = retPC;
                 s.r0 = r0;
 
-                Runtime.postMessage(getBreakpointMsg(s, brkId))
+                const { msg, heap } = getBreakpointMsg(s, brkId);
+                dbgHeap = heap;
+                Runtime.postMessage(msg)
+                breakAlways = false;
+                breakFrame = null;
+                __this.pauseScheduled();
                 dbgResume = (m: DebuggerMessage) => {
                     dbgResume = null;
-                    if (__this.dead) return;
+                    dbgHeap = null;
+                    if (__this.dead) return null;
+                    __this.resumeAllPausedScheduled();
+                    __this.board.onDebuggerResume();
                     runtime = __this;
                     U.assert(s.pc == retPC);
 
@@ -431,21 +785,23 @@ namespace pxsim {
 
                     switch (m.subtype) {
                         case "resume":
-                            break
+                            break;
                         case "stepover":
-                            breakAlways = true
-                            breakFrame = s
-                            break
+                            breakAlways = true;
+                            breakFrame = s;
+                            break;
                         case "stepinto":
-                            breakAlways = true
-                            break
+                            breakAlways = true;
+                            break;
                         case "stepout":
                             breakAlways = true;
                             breakFrame = s.parent || s;
                             break;
                     }
-
-                    return loop(s)
+                    U.assert(__this.loopLock == lock)
+                    __this.loopLock = null;
+                    loop(s);
+                    flushLoopLock();
                 }
 
                 return null;
@@ -459,7 +815,7 @@ namespace pxsim {
                         subtype: "trace",
                         breakpointId: brkId,
                     } as TraceMessage)
-                    thread.pause(tracePauseMs)
+                    thread.pause(tracePauseMs || 1)
                 }
                 else {
                     thread.pause(0)
@@ -492,6 +848,21 @@ namespace pxsim {
                         if (dbgResume)
                             dbgResume(msg);
                         break;
+                    case "variables":
+                        const vmsg = msg as VariablesRequestMessage;
+                        let vars: Variables = undefined;
+                        if (dbgHeap) {
+                            const v = dbgHeap[vmsg.variablesReference];
+                            if (v !== undefined)
+                                vars = dumpHeap(v, dbgHeap, vmsg.fields);
+                        }
+                        Runtime.postMessage(<pxsim.VariablesMessage>{
+                            type: "debugger",
+                            subtype: "variables",
+                            req_seq: msg.seq,
+                            variables: vars
+                        })
+                        break;
                 }
             }
 
@@ -500,22 +871,27 @@ namespace pxsim {
                     console.log("Runtime terminated")
                     return
                 }
+                U.assert(!__this.loopLock)
+                __this.perfStartRuntime()
                 try {
                     runtime = __this
                     while (!!p) {
                         __this.currFrame = p;
                         __this.currFrame.overwrittenPC = false;
                         p = p.fn(p)
+                        //if (yieldSteps-- < 0 && maybeYield(p, p.pc, 0)) break;
                         __this.maybeUpdateDisplay()
                         if (__this.currFrame.overwrittenPC)
                             p = __this.currFrame
                     }
+                    __this.perfStopRuntime()
                 } catch (e) {
+                    __this.perfStopRuntime()
                     if (__this.errorHandler)
                         __this.errorHandler(e)
                     else {
                         console.error("Simulator crashed, no error handler", e.stack)
-                        let msg = getBreakpointMsg(p, p.lastBrkId)
+                        const { msg } = getBreakpointMsg(p, p.lastBrkId)
                         msg.exceptionMessage = e.message
                         msg.exceptionStack = e.stack
                         Runtime.postMessage(msg)
@@ -536,12 +912,7 @@ namespace pxsim {
                 return s;
             }
 
-            function leave(s: StackFrame, v: any): StackFrame {
-                s.parent.retval = v;
-                if (s.finalCallback)
-                    s.finalCallback(v);
-                return s.parent
-            }
+            const leave = _leave
 
             function setupTop(cb: ResumeFn) {
                 let s = setupTopCore(cb)
@@ -584,32 +955,67 @@ namespace pxsim {
                 currResume = buildResume(s, retPC)
             }
 
+            function setupLambda(s: StackFrame, a: RefAction | LabelFn) {
+                if (a instanceof RefAction) {
+                    s.fn = a.func
+                    s.caps = a.fields
+                } else {
+                    s.fn = a
+                }
+            }
+
+            function checkSubtype(v: RefRecord, low: number, high: number) {
+                return v && v.vtable && low <= v.vtable.classNo && v.vtable.classNo <= high;
+            }
+
+            function failedCast(v: any) {
+                // TODO generate the right panic codes
+                if ((pxsim as any).control && (pxsim as any).control.dmesgValue)
+                    (pxsim as any).control.dmesgValue(v)
+                oops("failed cast on " + v)
+            }
+
             function buildResume(s: StackFrame, retPC: number) {
                 if (currResume) oops("already has resume")
                 s.pc = retPC;
-                return (v: any) => {
+                let start = Date.now()
+                let fn = (v: any) => {
                     if (__this.dead) return;
+                    if (__this.loopLock) {
+                        __this.loopLockWaitList.push(() => fn(v))
+                        return;
+                    }
                     runtime = __this;
+                    let now = Date.now()
+                    if (now - start > 3)
+                        lastYield = now
                     U.assert(s.pc == retPC);
-                    // TODO should loop() be called here using U.nextTick?
-                    // This matters if the simulator function calls cb()
-                    // synchronously.
                     if (v instanceof FnWrapper) {
                         let w = <FnWrapper>v
                         let frame: StackFrame = {
                             parent: s,
                             fn: w.func,
-                            lambdaArgs: [w.a0, w.a1, w.a2],
+                            lambdaArgs: w.args,
                             pc: 0,
                             caps: w.caps,
                             depth: s.depth + 1,
                             finalCallback: w.cb,
                         }
-                        return loop(actionCall(frame))
+                        // If the function we call never pauses, this would cause the stack
+                        // to grow unbounded.
+                        let lock = {}
+                        __this.loopLock = lock
+                        return U.nextTick(() => {
+                            U.assert(__this.loopLock === lock)
+                            __this.loopLock = null
+                            loop(actionCall(frame))
+                            flushLoopLock()
+                        })
                     }
                     s.retval = v;
                     return loop(s)
                 }
+                return fn
             }
 
             // tslint:disable-next-line
@@ -637,5 +1043,118 @@ namespace pxsim {
 
             initCurrentRuntime(msg);
         }
+
+        public setupPerfCounters(names: string[]) {
+            if (!names || !names.length)
+                return
+            this.perfCounters = names.map(s => new PerfCounter(s))
+        }
+
+        private perfStartRuntime() {
+            if (this.perfOffset !== 0) {
+                this.perfStack++
+            } else {
+                this.perfOffset = U.perfNowUs() - this.perfElapsed
+            }
+        }
+
+        private perfStopRuntime() {
+            if (this.perfStack) {
+                this.perfStack--
+            } else {
+                this.perfElapsed = this.perfNow()
+                this.perfOffset = 0
+            }
+        }
+
+        public perfNow() {
+            if (this.perfOffset === 0)
+                U.userError("bad time now")
+            return (U.perfNowUs() - this.perfOffset) | 0
+        }
+
+        public startPerfCounter(n: number) {
+            if (!this.perfCounters)
+                return
+            const c = this.perfCounters[n]
+            if (c.start) U.userError("startPerf")
+            c.start = this.perfNow()
+        }
+
+        public stopPerfCounter(n: number) {
+            if (!this.perfCounters)
+                return
+            const c = this.perfCounters[n]
+            if (!c.start) U.userError("stopPerf")
+            c.value += this.perfNow() - c.start;
+            c.start = 0;
+            c.numstops++;
+        }
+
+        // Wrapper for the setTimeout
+        schedule(fn: Function, timeout: number): number {
+            if (this.pausedOnBreakpoint) {
+                this.timeoutsPausedOnBreakpoint.push(new PausedTimeout(fn, timeout));
+                return -1;
+            }
+            // We call the timeout function and add its id to the timeouts scheduled.
+            if (timeout <= 0) return -1;
+            let timestamp = U.now();
+            let removeAndExecute = () => {
+                this.timeoutsScheduled.filter(ts => ts.timestampCall !== timestamp);
+                fn();
+            }
+            let id = setTimeout(removeAndExecute, timeout);
+            this.timeoutsScheduled.push(new TimeoutScheduled(id, fn, timeout, timestamp));
+            return id;
+        }
+
+        // On breakpoint, pause all timeouts
+        pauseScheduled() {
+            this.pausedOnBreakpoint = true;
+            this.timeoutsScheduled.forEach(ts => {
+                clearTimeout(ts.id);
+                let elapsed = U.now() - ts.timestampCall;
+                let timeRemaining = ts.totalRuntime - elapsed;
+                if (timeRemaining < 0) timeRemaining = 0;
+                this.timeoutsPausedOnBreakpoint.push(new PausedTimeout(ts.fn, timeRemaining))
+            });
+            this.lastPauseTimestamp = U.now();
+            this.timeoutsScheduled = [];
+        }
+
+        // When resuming after a breakpoint, restart all paused timeouts with their remaining time.
+        resumeAllPausedScheduled() {
+            // Takes the list of all fibers paused on a breakpoint and resumes them.
+            this.pausedOnBreakpoint = false;
+            this.timeoutsPausedOnBreakpoint.forEach(pt => {
+                this.schedule(pt.fn, pt.timeRemaining);
+            });
+            if (this.lastPauseTimestamp) {
+                this.pausedTime += U.now() - this.lastPauseTimestamp;
+                this.lastPauseTimestamp = 0;
+            }
+            this.timeoutsPausedOnBreakpoint = [];
+        }
+
+        // Removes from the timeouts scheduled list all the ones that had been fulfilled.
+        cleanScheduledExpired() {
+            let now = U.now();
+            this.timeoutsScheduled = this.timeoutsScheduled.filter(ts => {
+                let elapsed = now - ts.timestampCall;
+                return ts.totalRuntime > elapsed;
+            })
+        }
     }
+
+
+    export class PerfCounter {
+        start = 0;
+        numstops = 0;
+        value = 0;
+        constructor(public name: string) { }
+    }
+
+
+
 }

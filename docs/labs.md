@@ -2,16 +2,27 @@
 
 A collection of experimental MakeCode Editors created by the community.
 
+* Got some questions? Join us on the [Community Discord](http://aka.ms/makecodecommunity)!
 
 ## ~hint
 
 Experimental Editors are not supported by the Microsoft MakeCode team.
 To be listed on this page, your editor must be open source on GitHub,
-preferrably under the MIT License. 
+preferably under the MIT License. 
 
 ## ~
 
 ## Editors
+
+### Maker
+
+![Maker editor screenshot](/static/targets/maker/screenshot.png)
+
+An editor for maker-oriented microcontrollers, that typically require breadboarding. For 
+more information, see:
+
+* [Editor](https://maker.makecode.com)
+* [GitHub](https://github.com/Microsoft/pxt-maker)
 
 ### ARcadia: Marker-based augment reality
 
@@ -46,16 +57,6 @@ more information, see:
 * [Editor](https://jcspec.github.io/BuildUFace)
 * [GitHub](https://github.com/JCSPEC/BuildUFace)
 
-### Maker
-
-![Maker editor screenshot](/static/targets/maker/screenshot.png)
-
-An editor for maker-oriented microcontrollers, that typically require breadboarding. For 
-more information, see:
-
-* [Editor](https://maker.makecode.com)
-* [GitHub](https://github.com/Microsoft/pxt-maker)
-
 ### Holiday Card
 
 ![Holiday editor screenshot](/static/targets/holiday/screenshot.png)
@@ -66,8 +67,14 @@ MakeCode's support for embedding the MakeCode editor inside of a web app. For mo
 * [Editor](https://samelhusseini.github.io/pxt-holidays/controller.html)
 * [GitHub](https://github.com/samelhusseini/pxt-holidays)
 
+## Johnny-Five
+
+A small wrapper around the **Johnny-Five** library.
+
+* [GitHub](https://github.com/Microsoft/pxt-johnny-five)
+
 ## Documentation
 
 * [Create your own editor](/target-creation)
 * [Contribute](https://github.com/Microsoft/pxt)
-* [Join the Labs slack](https://makecodelabs.slack.com)
+* [Join the MakeCode Discord](http://aka.ms/makecodecommunity)
